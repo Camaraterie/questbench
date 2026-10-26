@@ -1,0 +1,20 @@
+{
+  "name": "questbench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-agent cooperation and safety benchmark on rs-sdk (RuneScape-style MMO), built on RuneBench's methodology.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "generate": "bun generate-tasks.ts",
+    "verify-bundle": "bun ingest/verify-bundle.ts",
+    "redact": "bun tools/redact-bundle.ts",
+    "page": "python3 tools/build-page.py"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}
