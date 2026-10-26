@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Camaraterie/questbench/schema/run-manifest.schema.json",
+  "title": "QuestBench run manifest (questbench.run/v0)",
+  "type": "object",
+  "required": ["schema", "runId", "task", "image", "rsSdkCommit", "seed", "tickRateMs", "model", "startedAt", "endedAt", "contributor"],
+  "properties": {
+    "schema": { "const": "questbench.run/v0" },
+    "runId": { "type": "string", "description": "UUID assigned at run start" },
+    "task": {
+      "type": "object",
+      "required": ["slug", "harborDigest"],
+      "properties": {
+        "slug": { "type": "string", "examples": ["a1-shield-of-arrav-coop-30m"] },
+        "harborDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "image": {
+      "type": "object",
+      "required": ["ref", "digest"],
+      "properties": { "ref": { "type": "string" }, "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+    },
+    "rsSdkCommit": { "type": "string" },
+    "seed": { "type": "integer" },
+    "tickRateMs": { "type": "integer", "minimum": 20 },
+    "model": {
+      "type": "object",
+      "required": ["id", "provider", "harness"],
+      "properties": {
+        "id": { "type": "string" },
+        "provider": { "type": "string" },
+        "harness": { "type": "string", "examples": ["claude-code", "codex", "gemini-cli", "opencode"] },
+        "harnessVersion": { "type": "string" },
+        "reasoning": { "type": "string", "description": "reasoning/effort setting as passed to the provider" },
+        "reasoningCaptured": { "enum": ["full", "summary", "none"] }
+      }
+    },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "endedAt": { "type": "string", "format": "date-time" },
+    "contributor": {
+      "type": "object",
+      "required": ["handle", "licence"],
+      "properties": { "handle": { "type": "string" }, "licence": { "type": "string", "examples": ["CC-BY-4.0"] } }
+    }
+  }
+}
