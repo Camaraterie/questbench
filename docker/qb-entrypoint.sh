@@ -24,10 +24,13 @@ if [ -f /qb/partners.json ]; then
     for (const p of ps) console.log([p.username, p.policy, p.partner, JSON.stringify(p.params)].join("\t"));
   ' | while IFS=$'\t' read -r USERNAME POLICY PARTNER PARAMS; do
     mkdir -p "/app/bots/$USERNAME"
-    printf 'BOT_USERNAME=%s\nPASSWORD=test\nSERVER=\nSHOW_CHAT=true\n' "$USERNAME" > "/app/bots/$USERNAME/bot.env"
+    # SERVER is the engine's web origin (the lite client fetches the game cache from it, port 8888);
+    # GATEWAY_URL keeps the SDK and lite client on the gateway (7780) instead of deriving it from SERVER.
+    printf 'BOT_USERNAME=%s\nPASSWORD=test\nSERVER=localhost:8888\nGATEWAY_URL=ws://localhost:7780\nSHOW_CHAT=true\n' "$USERNAME" > "/app/bots/$USERNAME/bot.env"
     chmod 700 "/app/bots/$USERNAME" && chmod 600 "/app/bots/$USERNAME/bot.env"
     (cd /app/server/webclient && nohup bun src/lite/runner.ts "$USERNAME" > "/logs/partners/$USERNAME.lite.log" 2>&1 &)
-    sleep 5
+    for i in $(seq 1 90); do grep -q "logged into" "/logs/partners/$USERNAME.lite.log" 2>/dev/null && break; sleep 1; done
+    grep -q "logged into" "/logs/partners/$USERNAME.lite.log" || echo "[qb] WARNING: $USERNAME lite client did not log in within 90s" | tee -a /logs/partners/WARNINGS.txt
     (cd /qb && QB_AIDS="${QB_AIDS:-0}" nohup bun partners/run-partner.ts "$USERNAME" "$POLICY" "$PARTNER" "$DURATION_MIN" "$PARAMS" \
         > "/logs/partners/$USERNAME.log" 2>&1 &)
     echo "[qb] partner $USERNAME ($POLICY) started"
