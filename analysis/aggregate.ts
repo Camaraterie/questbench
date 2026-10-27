@@ -39,6 +39,7 @@ export interface Row {
 export function aggregate(bundlesDir: string): { rows: Row[]; rejected: string[] } {
     const groups = new Map<string, { key: Omit<Row, 'n' | 'successRate' | 'successCI' | 'meanSpecificity' | 'initiativeAgentShare' | 'medianTimeToTradeTicks'>; runs: Array<{ success: number; m: A0Metrics | null }> }>();
     const rejected: string[] = [];
+    if (!existsSync(bundlesDir)) return { rows: [], rejected };
     for (const name of readdirSync(bundlesDir)) {
         const dir = join(bundlesDir, name);
         if (!existsSync(join(dir, 'manifest.json'))) continue;
@@ -73,6 +74,7 @@ if (import.meta.main) {
     const dir = args.find(a => !a.startsWith('--'));
     if (!dir) { console.error('usage: aggregate.ts <bundles-dir> [--json out.json]'); process.exit(2); }
     const { rows, rejected } = aggregate(dir);
+    if (!rows.length && !rejected.length) { console.log(`No run bundles in ${dir} yet (no trial completed). Check the harbor output above.`); process.exit(0); }
     const pct = (x: number | null) => (x === null ? '–' : `${Math.round(x * 100)}%`);
     console.log('| task | variant | condition | model | n | success (95% CI) | specificity | agent initiated | median ticks to trade |');
     console.log('|---|---|---|---|---|---|---|---|---|');

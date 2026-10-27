@@ -62,7 +62,7 @@ Full instructions and a first-run checklist: [docs/RUNBOOK.md](docs/RUNBOOK.md).
 ## Pipeline
 
 ```
-docker/Dockerfile        RuneBench image + engine event-log patch + partners + aids  ->  questbench:local
+docker/Dockerfile        RuneBench image + event-log hooks + partners + aids  ->  ghcr.io/camaraterie/questbench
 generate-tasks.ts        scenario x variant x (bare|aided) x duration                 ->  tasks/<slug>/   (20 tasks)
 harbor run               container: engine, gateway, agent bot, scripted partner(s)
   tests/test.sh          collect-artifacts.sh (logout -> final saves) + verifier       ->  /logs/verifier/qb/

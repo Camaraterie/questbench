@@ -20,9 +20,10 @@ const TASKS = join(ROOT, 'tasks');
 
 /**
  * Base image: the QuestBench image (docker/Dockerfile = RuneBench image + event-log patch + partner
- * and aid tooling). Build it locally with ./docker/build.sh, or point QB_IMAGE at a published tag.
+ * and aid tooling). Defaults to the published image; pin a commit tag via QB_IMAGE for reproducible
+ * pilots, or set QB_IMAGE=questbench:local after ./docker/build.sh.
  */
-const QB_IMAGE = process.env.QB_IMAGE ?? 'questbench:local';
+const QB_IMAGE = process.env.QB_IMAGE ?? 'ghcr.io/camaraterie/questbench:latest';
 const PLAYERS_DIR = '/app/server/engine/data/players/main';
 
 const arg = (k: string) => { const i = process.argv.indexOf(`--${k}`); return i >= 0 ? process.argv[i + 1] : undefined; };
