@@ -90,9 +90,11 @@ export function bundleTrial(trialDir: string, jobDir: string, opts: BundleOption
     writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
     if (existsSync(join(qb, 'events.jsonl'))) cpSync(join(qb, 'events.jsonl'), join(dir, 'events.jsonl')); else writeFileSync(join(dir, 'events.jsonl'), '');
     cpSync(join(qb, 'saves'), join(dir, 'saves'), { recursive: true });
-    for (const extra of ['partners', 'board.jsonl', 'trade_ledger.jsonl', 'WARNINGS.txt']) if (existsSync(join(qb, extra))) cpSync(join(qb, extra), join(dir, extra), { recursive: true });
+    for (const extra of ['partners', 'board.jsonl', 'trade_ledger.jsonl', 'WARNINGS.txt', 'reports.jsonl']) if (existsSync(join(qb, extra))) cpSync(join(qb, extra), join(dir, extra), { recursive: true });
     if (existsSync(join(trialDir, 'verifier', 'reward.json'))) cpSync(join(trialDir, 'verifier', 'reward.json'), join(dir, 'verdict.json'));
     if (existsSync(join(trialDir, 'agent'))) cpSync(join(trialDir, 'agent'), join(dir, 'agent'), { recursive: true });
+    // RuneBench's entrypoint records the agent's screen to /logs/verifier/recording.mp4 (1 fps, 400x300).
+    if (existsSync(join(trialDir, 'verifier', 'recording.mp4'))) cpSync(join(trialDir, 'verifier', 'recording.mp4'), join(dir, 'recording.mp4'));
 
     // Redact every text file except the hash-chained event log (editing it would break the chain;
     // it only holds in-game text, which the server already filtered) and the manifest.
