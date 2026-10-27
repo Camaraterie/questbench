@@ -1,0 +1,2 @@
+{"ts":"2026-10-27T20:37:31.697Z","username":"partner01","policy":"meetup-partner","event":"start","partner":"agent","params":{"give":[{"id":2351,"count":5,"item":"iron bar"}],"want":[{"id":995,"count":300,"item":"coins"}],"home":{"x":3212,"z":3428},"arriveDelaySecs":0,"waitSecs":600,"replyDelaySecs":5}}
+{"ts":"2026-10-27T20:52:31.513Z","username":"partner01","policy":"meetup-partner","event":"end","success":true}
