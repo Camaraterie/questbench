@@ -44,6 +44,14 @@ Harbor prints `LiteLLM could not resolve model 'zai-coding-plan/glm-5.3'` and `-
 
 **WSL:** clone into your Linux home (`~/questbench`) rather than `/mnt/c/...`; Docker builds from the Windows drive are much slower.
 
+## Where results go
+
+At the end of every pilot run, `run-pilot.sh`:
+1. **Publishes** each new bundle to `Camaraterie/questbench-runs` under `runs/<date>/<task>/<run-id>/` and refreshes `runs/index.json` (`tools/publish-run.ts`). The repo is cloned next to this one on first use with your normal GitHub login; run `gh auth login` once if git asks for a password.
+2. **Files agent reports** as GitHub issues labelled `agent-report` on this repo (`tools/file-reports.ts`). Agents write reports during a run with `bun /qb/aids/report.ts "..."`; identical complaints share one issue.
+
+`--no-publish` keeps everything local. rs-sdk's own bug-report tool is switched off inside the container (`TELEMETRY=false`) so benchmark runs never post to the public demo server.
+
 ## The A0 task matrix (10 tasks)
 
 | Variant | Partner behaviour | × condition |
