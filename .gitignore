@@ -7,3 +7,5 @@ bundles/
 bot.env
 vendor/
 .DS_Store
+.env.local
+results/
