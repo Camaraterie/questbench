@@ -46,7 +46,7 @@ verifiers/               check_quest.ts, check_trade.ts (score from saves only)
 ingest/verify-bundle.ts  server-side checks for submitted run bundles
 tools/                   bundle-from-harbor.ts, redact-bundle.ts, submit.ts (stub), build-page.py
 schema/                  run manifest JSON schema
-engine/                  event-log patch for rs-sdk (patches/, src/EventLog.ts, EVENT_LOG.md)
+engine/                  event-log hooks for rs-sdk (apply-patch.ts, src/EventLog.ts, EVENT_LOG.md)
 docs/                    project page (GitHub Pages)
 ```
 
@@ -75,7 +75,7 @@ analysis/aggregate.ts    bundles -> results table with bootstrap CIs            
 | Piece | State |
 |---|---|
 | A0 Rendezvous (pilot) | 5 partner variants × bare/aided; meetup partner, aids, verifier, metrics written and unit-tested |
-| Engine event log | Patch written against rs-sdk source; applies cleanly to the 2026-10-25 rs-sdk commit; output verified against the chain checker |
+| Engine event log | Anchor-based patcher (`engine/apply-patch.ts`); applies to rs-sdk `main` and RuneBench's `bench-v71`; output verified against the chain checker |
 | Coordination aids | Notice board, inbox service (rs-sdk observe-mode chat), chat-interrupt helper |
 | Bundling, redaction, ingest, aggregation | Offline end-to-end test passes |
 | Save parser/writer, quest + trade verifiers | Tested |
