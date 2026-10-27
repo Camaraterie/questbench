@@ -14,6 +14,11 @@ RUN bun /qb/engine/apply-patch.ts /app \
     && grep -q "QB-EVENTLOG" /app/server/engine/src/engine/script/handlers/InvOps.ts \
     && grep -q "QB-EVENTLOG" /app/server/engine/src/network/game/client/handler/MessagePrivateHandler.ts
 ENV EVENT_LOG_FILE=/logs/tracking/events.jsonl
+# Private messages are relayed by the engine's friend server, which is off by default; without it
+# every PM is silently dropped (the sender still sees its own "To <name>" echo). EASY_STARTUP starts
+# the friend server as a worker before the world boots; FRIEND_SERVER makes the world use it.
+ENV EASY_STARTUP=true
+ENV FRIEND_SERVER=true
 ENV TRADE_LEDGER_FILE=/logs/tracking/trade_ledger.jsonl
 
 # 2. QuestBench runtime: scripted partners, coordination aids, artifact collection.
@@ -22,6 +27,7 @@ COPY partners /qb/partners
 COPY aids /qb/aids
 COPY docker/qb-entrypoint.sh /qb-entrypoint.sh
 COPY docker/collect-artifacts.sh /qb/collect-artifacts.sh
+COPY docker/check-run.ts /qb/check-run.ts
 
 # 3. Multi-agent scenarios need chat: RuneBench's agent bot.env ships SHOW_CHAT=false.
 RUN sed -i 's/^SHOW_CHAT=.*/SHOW_CHAT=true/' /app/bots/agent/bot.env \
