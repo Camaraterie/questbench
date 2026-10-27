@@ -30,6 +30,7 @@ cp /logs/tracking/qb_start.txt "$OUT/" 2>/dev/null
 cp /logs/partners/*.jsonl /logs/partners/*.log "$OUT/partners/" 2>/dev/null
 cat /logs/partners/WARNINGS.txt >> "$OUT/WARNINGS.txt" 2>/dev/null
 cp /var/qb/board/*.jsonl "$OUT/" 2>/dev/null
+cp /var/qb/reports/reports.jsonl "$OUT/reports.jsonl" 2>/dev/null
 cp /var/qb/inbox/*.jsonl "$OUT/partners/" 2>/dev/null
 cp /app/.rs-sdk-commit "$OUT/rs-sdk-commit.txt" 2>/dev/null
 env | grep -E '^(QB_|NODE_TICKRATE)' | sort > "$OUT/env.txt"
