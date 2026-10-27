@@ -59,6 +59,17 @@ bun test                                    # 29 unit + offline end-to-end tests
 
 Full instructions and a first-run checklist: [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
+## Watch runs in your browser: QuestBench Studio
+
+```bash
+bun run studio      # opens http://localhost:4747
+```
+- **Live:** the agent's timeline (thoughts, code, results, cost), the game screen refreshing every second, the partner's progress (online → heard → replied → agreed to meet → arrived → traded), and everything the server recorded (PMs, chat, trades). Alerts appear if the partner bot fails to log in.
+- **Runs:** every finished run with its outcome, game video, conversation and full timeline.
+- **Launch:** a setup check (Docker, Harbor, key, RuneBench) and a Run button. Put `ZHIPU_API_KEY=...` in a gitignored `.env.local` so launches don't need a terminal.
+
+Studio only reads what the container already writes and never logs into the game, so watching can't affect an experiment. Coding agents can use the same JSON API (see `AGENTS.md`).
+
 ## Pipeline
 
 ```
