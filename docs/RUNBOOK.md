@@ -16,7 +16,7 @@ All runs use a **local, controlled server** inside a container. Nothing touches 
 ```
 
 What it does:
-1. **Builds the image** (`docker/Dockerfile`): starts from RuneBench's published benchmark image, applies the event-log engine patch (`engine/patches/`), adds the scripted partners and coordination aids, and turns chat on for the agent bot.
+1. **Builds the image** (`docker/Dockerfile`): starts from RuneBench's published benchmark image, applies the event-log hooks (`engine/apply-patch.ts`), adds the scripted partners and coordination aids, and turns chat on for the agent bot.
 2. **Generates tasks** (`generate-tasks.ts`): starting saves, partner config, instructions (aided tasks also get `aids/INSTRUCTIONS.md`), and a bundled verifier.
 3. **Runs Harbor.** In the container: the RuneBench services start, then `partner01` logs in through rs-sdk's headless lite client and runs its scripted policy; the agent plays through the `rs-agent` MCP server.
 4. **Collects and scores.** `tests/test.sh` stops the partners, logs every bot out so final saves reach disk, copies the event log, saves and partner logs to `/logs/verifier/qb/`, then scores the trade from the saves.
@@ -49,7 +49,7 @@ The coding plan is billed by subscription, not per token, so the `cost_usd` in b
 **Aided** runs add a shared notice board, an inbox that captures messages while scripts run, and a chat-interrupt helper. Comparing bare with aided separates model limits from harness limits.
 
 ## First-run checklist (things only a live run can confirm)
-- [ ] `docker/build.sh` succeeds: the patch applies to the rs-sdk commit baked into the RuneBench image.
+- [ ] `docker/build.sh` succeeds: all event-log hooks apply to the rs-sdk revision baked into the RuneBench image.
 - [ ] `events.jsonl` appears in `bundles/run-*/` and passes the chain check (the ingest output shows `"tier": "submitted"`).
 - [ ] `partners/partner01.jsonl` shows `start`, then `reply`/`committed`/`arrived` events.
 - [ ] Final saves are rewritten on logout (no `WARNINGS.txt` in the bundle).
