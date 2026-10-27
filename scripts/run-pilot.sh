@@ -4,6 +4,7 @@
 #   ./scripts/run-pilot.sh --glm --runebench ../RuneBench                  # GLM-5.3 on a z.ai key, 1 smoke trial
 #   ./scripts/run-pilot.sh --glm --runebench ../RuneBench --all -k 3       # all 10 A0 tasks x 3 trials
 #   ./scripts/run-pilot.sh -a claude-code -m anthropic/claude-sonnet-4-5   # any built-in Harbor agent
+#   --no-publish  keep results local instead of pushing them to Camaraterie/questbench-runs
 #
 # Image: uses the published image (QB_IMAGE, default ghcr.io/camaraterie/questbench:latest).
 #        Pin a commit tag for a pilot so every run shares one environment. --build-local builds
@@ -17,7 +18,7 @@ cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 
 AGENT="claude-code"; MODEL=""; IMPORT_PATH=""; RB=""; TRIALS=1
-FILTER="a0-rendezvous-punctual-bare-15m"; ENV="docker"; HANDLE="${QB_HANDLE:-anonymous}"; BUILD_LOCAL=0
+FILTER="a0-rendezvous-punctual-bare-15m"; ENV="docker"; HANDLE="${QB_HANDLE:-anonymous}"; BUILD_LOCAL=0; PUBLISH=1
 while [ $# -gt 0 ]; do
   case "$1" in
     -a) AGENT="$2"; shift 2 ;;
@@ -31,6 +32,7 @@ while [ $# -gt 0 ]; do
     --runebench) RB="$2"; shift 2 ;;
     --glm) IMPORT_PATH="qb_glm53:QbGlm53OpenCode"; MODEL="zai-coding-plan/glm-5.3"; shift ;;
     --build-local) BUILD_LOCAL=1; shift ;;
+    --no-publish) PUBLISH=0; shift ;;
     --skip-build) shift ;;   # accepted for compatibility; the published image is the default now
     *) echo "unknown arg $1"; exit 2 ;;
   esac
@@ -80,4 +82,10 @@ for TASK in $(ls tasks); do
 done
 
 bun analysis/aggregate.ts bundles --json results/a0-latest.json
-echo "Bundles are in ./bundles (redacted). Review them before sharing."
+if [ "$PUBLISH" = "1" ]; then
+  # Results go to Camaraterie/questbench-runs (cloned next to this repo on first use); agent reports become issues.
+  bun tools/publish-run.ts bundles || echo "! publishing failed; bundles are still in ./bundles (rerun: bun tools/publish-run.ts)"
+  bun tools/file-reports.ts bundles || true
+else
+  echo "Bundles are in ./bundles (redacted). Publish later with: bun tools/publish-run.ts"
+fi
