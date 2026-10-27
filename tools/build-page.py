@@ -20,7 +20,7 @@ for i,p in enumerate(parts):
     secs.append(f'''<section class="section"><div class="container is-max-desktop"><div class="columns is-centered"><div class="column is-four-fifths">
 <h2 class="title is-3 has-text-centered">{title}</h2><div class="{cls}">{render(body)}</div></div></div></div></section>''')
 def btn(href,icon,label): return f'<span class="link-block"><a href="{href}" {A} class="external-link button is-normal is-rounded is-dark"><span class="icon"><i class="{icon}"></i></span><span>{label}</span></a></span>'
-links=''.join([btn('https://github.com/Camaraterie/questbench','fab fa-github','Code'),btn('https://github.com/MaxBittker/rs-sdk','fas fa-cube','rs-sdk'),btn('https://maxbittker.github.io/runebench/','fas fa-chart-bar','RuneBench'),btn('https://discord.gg/3DcuU5cMJN','fab fa-discord','Discord')])
+links=''.join([btn('https://github.com/Camaraterie/questbench','fab fa-github','Code'),btn('scenarios.html','fas fa-scroll','Scenarios'),btn('https://github.com/MaxBittker/rs-sdk','fas fa-cube','rs-sdk'),btn('https://maxbittker.github.io/runebench/','fas fa-chart-bar','RuneBench'),btn('https://discord.gg/3DcuU5cMJN','fab fa-discord','Discord')])
 tracks=''.join(f'<span class="tag is-medium is-light">{t}</span>' for t in ['A · Fellowship','B · Commons','C · Shadows','D · Relay','E · Mirror'])
 html=f'''<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>QuestBench: Multi-Agent Cooperation &amp; Safety on RuneScape</title>
