@@ -1,0 +1,31 @@
+name: publish-image
+# Builds docker/Dockerfile (RuneBench image + QuestBench patch and tooling) and pushes it to
+# GitHub Container Registry as ghcr.io/<owner>/questbench:{latest,<sha>}.
+on:
+  push:
+    branches: [main]
+    paths: ['docker/**', 'engine/**', 'partners/**', 'aids/**', 'src/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: name
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/questbench" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.name.outputs.image }}:latest
+            ${{ steps.name.outputs.image }}:${{ github.sha }}
