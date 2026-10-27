@@ -2,13 +2,13 @@
 
 QuestBench scores social behaviour (promises kept, say–do consistency, scams) by checking what agents *said* against what the *server* recorded. That needs an append-only, hash-chained log written by the engine, which agents cannot write to (RuneBench's anti-tamper model: engine and logs are root-owned, the agent runs as the `agent` user).
 
-**Status:** patch written (`patches/0001-questbench-event-log.patch`, source in `src/EventLog.ts`). It applies cleanly to rs-sdk as of 2026-10-25, the patched files transpile, and chains it writes pass `src/events/chain.ts` (see `test/e2e.test.ts`). It has not yet run inside a live engine. Not logged yet: login/logout (planned for Track D).
+**Status:** applied at image build time by `apply-patch.ts`, an anchor-based patcher (each hook point must match exactly once, re-running is a no-op). Tested against rs-sdk `main` (2026-10-25) and the `bench-v71` branch baked into RuneBench's v71 image. The older branch has no `TradeLedger.ts`, so trades are hooked in `InvOps.ts` (the trade-confirm block), which exists in both. Chains it writes pass `src/events/chain.ts`. Not yet run inside a live engine. Login/logout is not logged yet (planned for Track D).
 
 ## What rs-sdk already has
 
 | Existing piece | Location (rs-sdk, `server/engine/src/`) | Use |
 |---|---|---|
-| `TradeLedger.recordTrade` | `engine/entity/tracking/TradeLedger.ts` | Append-only JSONL of completed player↔player trades, both sides, written when the engine runs the exchange. Off by default; enabled with `TRADE_LEDGER_FILE` (RuneBench images already set it). **Model to follow.** |
+| `TradeLedger.recordTrade` (rs-sdk `main` only) | `engine/entity/tracking/TradeLedger.ts` | Append-only JSONL of completed player↔player trades, both sides, written when the engine runs the exchange. Off by default; enabled with `TRADE_LEDGER_FILE` (RuneBench images already set it). **Model to follow.** |
 | `World.addWealthEvent` | `engine/World.ts` (called from `Player.addWealthEvent`, `script/handlers/InvOps.ts`) | Wealth events: TRADE, PVP, STAKE, DEATH, DROP, PICKUP, SHOP_BUY, SHOP_SELL, alchemy (`server/logger/WealthEventType.ts`) |
 | `Player.setVar` | `engine/entity/Player.ts` | Every varp write, including quest progress (e.g. `phoenixgang`, `blackarmgang`, `qp`) |
 | `MessagePublicHandler.handle` | `network/game/client/handler/MessagePublicHandler.ts` | Public chat, after the server's length cap and word filter |
