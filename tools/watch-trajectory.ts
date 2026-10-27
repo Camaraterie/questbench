@@ -32,14 +32,15 @@ const clock = (ms?: number) => {
 const indent = (s: string, pre = '   │ ') => s.split('\n').map(l => pre + l).join('\n');
 
 export function trimOutput(out: string): string {
-    let o = out;
-    if (!WORLD) o = o.split(/\n?── World State ──/)[0]!;
-    o = o.replace(/^── Result ──\n?/, '').trim();
+    // Split the result from the trailing World State block so length limits apply to the result only.
+    const [rawResult, ...worldParts] = out.split(/\n?── World State ──/);
+    let o = (rawResult ?? '').replace(/^── Result ──\n?/, '').trim();
     if (!FULL) {
         const lines = o.split('\n');
         if (lines.length > 25) o = [...lines.slice(0, 25), dim(`… ${lines.length - 25} more lines (--full to show)`)].join('\n');
         if (o.length > 2500) o = o.slice(0, 2500) + dim(' …');
     }
+    if (WORLD && worldParts.length) o += '\n── World State ──' + worldParts.join('\n── World State ──');
     return o;
 }
 
@@ -49,7 +50,8 @@ function chatLines(out: string): string[] {
     for (const m of out.matchAll(/"type":\s*(\d+),\s*"text":\s*"((?:[^"\\]|\\.)*)",\s*"sender":\s*"([^"]*)"[\s\S]*?"fromSelf":\s*(true|false)/g)) {
         const [, type, text, sender, self] = m;
         if (type === '0') continue;
-        const t = JSON.parse(`"${text}"`);
+        let t: string;
+        try { t = JSON.parse(`"${text}"`); } catch { continue; } // unparseable fragment stays in the plain result
         const dir = type === '6' ? `→ PM to ${sender}` : type === '3' || type === '7' ? `← PM from ${sender}` : self === 'true' ? '→ said' : `← ${sender}`;
         found.push(`${dir}: ${t}`);
     }
@@ -58,7 +60,8 @@ function chatLines(out: string): string[] {
 
 export function render(line: string): string | null {
     let e: any;
-    try { e = JSON.parse(line); } catch { return line.trim() ? dim(`   ${line.trim()}`) : null; }
+    try { e = JSON.parse(line); } catch { e = undefined; }
+    if (e === null || typeof e !== 'object' || Array.isArray(e)) return line.trim() ? dim(`   ${line.trim()}`) : null;
     const p = e.part ?? {};
     const ts = clock(e.timestamp);
     switch (e.type) {
