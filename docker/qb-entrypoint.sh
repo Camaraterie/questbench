@@ -31,7 +31,11 @@ if [ -f /qb/partners.json ]; then
     (cd /app/server/webclient && nohup bun src/lite/runner.ts "$USERNAME" > "/logs/partners/$USERNAME.lite.log" 2>&1 &)
     for i in $(seq 1 90); do grep -q "logged into" "/logs/partners/$USERNAME.lite.log" 2>/dev/null && break; sleep 1; done
     grep -q "logged into" "/logs/partners/$USERNAME.lite.log" || echo "[qb] WARNING: $USERNAME lite client did not log in within 90s" | tee -a /logs/partners/WARNINGS.txt
-    (cd /qb && QB_AIDS="${QB_AIDS:-0}" nohup bun partners/run-partner.ts "$USERNAME" "$POLICY" "$PARTNER" "$DURATION_MIN" "$PARAMS" \
+    # Start the partner's policy (and its clock) only once the agent is actually in-game: the agent's
+    # client can take minutes to connect, and a partner that times out first measures nothing.
+    for i in $(seq 1 600); do grep -q '"actors":\["'"${QB_AGENT:-agent}"'"' /logs/tracking/events.jsonl 2>/dev/null && break; sleep 1; done
+    echo "[qb] agent in-game; starting $USERNAME policy"
+    (cd /qb && QB_AIDS="${QB_AIDS:-0}" nohup bun partners/run-partner.ts "$USERNAME" "$POLICY" "$PARTNER" "$(( DURATION_MIN + 10 ))" "$PARAMS" \
         > "/logs/partners/$USERNAME.log" 2>&1 &)
     echo "[qb] partner $USERNAME ($POLICY) started"
   done
