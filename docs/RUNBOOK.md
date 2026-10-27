@@ -12,11 +12,12 @@ All runs use a **local, controlled server** inside a container. Nothing touches 
 
 ```bash
 ./scripts/run-pilot.sh -a claude-code -m anthropic/claude-sonnet-4-5            # 1 trial, punctual partner, no aids
+./scripts/run-pilot.sh --glm --runebench ../RuneBench                          # same, GLM-5.3 on a z.ai key
 ./scripts/run-pilot.sh -a claude-code -m anthropic/claude-sonnet-4-5 --all -k 3  # all 10 A0 tasks, 3 trials each
 ```
 
 What it does:
-1. **Builds the image** (`docker/Dockerfile`): starts from RuneBench's published benchmark image, applies the event-log hooks (`engine/apply-patch.ts`), adds the scripted partners and coordination aids, and turns chat on for the agent bot.
+1. **Uses the published image** (`ghcr.io/camaraterie/questbench`, built by CI from `docker/Dockerfile`; `--build-local` builds it yourself): starts from RuneBench's published benchmark image, applies the event-log hooks (`engine/apply-patch.ts`), adds the scripted partners and coordination aids, and turns chat on for the agent bot.
 2. **Generates tasks** (`generate-tasks.ts`): starting saves, partner config, instructions (aided tasks also get `aids/INSTRUCTIONS.md`), and a bundled verifier.
 3. **Runs Harbor.** In the container: the RuneBench services start, then `partner01` logs in through rs-sdk's headless lite client and runs its scripted policy; the agent plays through the `rs-agent` MCP server.
 4. **Collects and scores.** `tests/test.sh` stops the partners, logs every bot out so final saves reach disk, copies the event log, saves and partner logs to `/logs/verifier/qb/`, then scores the trade from the saves.
@@ -25,16 +26,23 @@ What it does:
 
 ## Running GLM-5.3 on a z.ai key
 
-RuneBench already ships an OpenCode adapter for GLM-5.3 on the z.ai GLM Coding Plan. Reuse it:
+`--glm` uses `agents/qb_glm53.py`, a thin wrapper over RuneBench's GLM-5.3 OpenCode adapter (z.ai GLM Coding Plan). The wrapper declares MCP support, which newer Harbor releases require before they will start a trial with MCP servers.
 
 ```bash
 git clone https://github.com/MaxBittker/RuneBench ../RuneBench
 export ZHIPU_API_KEY=...        # your z.ai key, set in your own shell; never commit it
+export QB_IMAGE=ghcr.io/camaraterie/questbench:<commit-sha>   # optional: pin one image for the whole pilot
 ./scripts/run-pilot.sh --glm --runebench ../RuneBench                 # 1 smoke trial
 ./scripts/run-pilot.sh --glm --runebench ../RuneBench --all -k 3      # 10 tasks x 3 trials
 ```
 
+Environment variables only last for the terminal they were set in; in a new terminal, export them again.
+
 The coding plan is billed by subscription, not per token, so the `cost_usd` in bundles uses RuneBench's stand-in list price.
+
+Harbor prints `LiteLLM could not resolve model 'zai-coding-plan/glm-5.3'` and `--agent-import-path is deprecated`. Both are harmless here: OpenCode resolves the z.ai provider itself, and the flag still works.
+
+**WSL:** clone into your Linux home (`~/questbench`) rather than `/mnt/c/...`; Docker builds from the Windows drive are much slower.
 
 ## The A0 task matrix (10 tasks)
 
