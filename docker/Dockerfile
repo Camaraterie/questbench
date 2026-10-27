@@ -7,9 +7,12 @@ ARG RUNEBENCH_IMAGE=ghcr.io/maxbittker/rs-agent-benchmark:v71
 FROM ${RUNEBENCH_IMAGE}
 
 # 1. Engine patch: hash-chained server event log (chat, PMs, trades, wealth events, quest varps).
-COPY engine/patches /qb/engine/patches
-RUN cd /app && for p in /qb/engine/patches/*.patch; do git apply -p1 --verbose "$p"; done \
-    && grep -q "logEvent" /app/server/engine/src/engine/entity/tracking/TradeLedger.ts
+#    Anchor-based patcher, so it works on the rs-sdk revision RuneBench's image bakes (bench-v71)
+#    as well as current main. Fails the build if any hook point can't be found.
+COPY engine /qb/engine
+RUN bun /qb/engine/apply-patch.ts /app \
+    && grep -q "QB-EVENTLOG" /app/server/engine/src/engine/script/handlers/InvOps.ts \
+    && grep -q "QB-EVENTLOG" /app/server/engine/src/network/game/client/handler/MessagePrivateHandler.ts
 ENV EVENT_LOG_FILE=/logs/tracking/events.jsonl
 ENV TRADE_LEDGER_FILE=/logs/tracking/trade_ledger.jsonl
 

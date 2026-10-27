@@ -58,13 +58,19 @@ describe('engine event log is compatible with the verifier', () => {
         ]);
         expect(verifyChain(readFileSync(f, 'utf8'))).toMatchObject({ ok: true, count: 3 });
     });
-    test('the engine patch ships exactly engine/src/EventLog.ts', () => {
-        const patch = readFileSync('engine/patches/0001-questbench-event-log.patch', 'utf8');
-        const src = readFileSync('engine/src/EventLog.ts', 'utf8');
-        const block = patch.split('diff --git ').find(b => b.includes('tracking/EventLog.ts'))!;
-        const added = block.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).map(l => l.slice(1)).join('\n');
-        expect(added.trim()).toBe(src.trim());
-        for (const hook of ['TradeLedger.ts', 'Player.ts', 'MessagePublicHandler.ts', 'MessagePrivateHandler.ts']) expect(patch).toContain(hook);
+    test('apply-patch hooks every anchor once, is idempotent, and fails loudly on drift', async () => {
+        const { patchText } = await import('../engine/apply-patch');
+        const invOps = "import World from '#/engine/World.js';\n\nfoo(() => {\n            if (fromItems.length > 0 || toLogs.size > 0) {\n                const toItems = Array.from(toLogs.values());\n                fromPlayer.addWealthEvent({\n                    event_type: WealthEventType.TRADE,\n                });\n            }\n});\n";
+        const once = patchText('engine/script/handlers/InvOps.ts', invOps);
+        expect(once).toContain("logEvent(World.currentTick, 'trade', [fromPlayer.username, toPlayer.username]");
+        expect(once).toContain("import { logEvent } from '#/engine/entity/tracking/EventLog.js';");
+        expect(patchText('engine/script/handlers/InvOps.ts', once)).toBe(once);
+        expect(() => patchText('engine/script/handlers/InvOps.ts', "import x from 'y';\nnothing here\n")).toThrow(/matched 0 times/);
+        const player = "import World from '#/engine/World.js';\nclass P {\n    addWealthEvent(event: WealthEventParams) {\n        World.addWealthEvent({});\n    }\n    setVar(id: number, value: number | string) {\n        if (a) {\n        } else if (typeof value === 'number') {\n            this.vars[varp.id] = value;\n        }\n    }\n}\n";
+        const p = patchText('engine/entity/Player.ts', player);
+        expect(p).toContain("'varp', [this.username]");
+        expect(p).toContain("'wealth', [this.username]");
+        expect(p).toContain("import { WealthEventType } from '#/server/logger/WealthEventType.js';");
     });
 });
 
