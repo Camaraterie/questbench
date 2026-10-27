@@ -1,0 +1,9 @@
+node_modules/
+tasks/
+jobs/
+bundles/
+*.tar.zst
+.env
+bot.env
+vendor/
+.DS_Store
