@@ -101,7 +101,9 @@ describe('task generation', () => {
         expect(a0).toHaveLength(10);
         const aided = a0.find(t => t.slug === 'a0-rendezvous-drifter-aided-15m')!;
         expect(instruction(aided)).toContain('/qb/aids/board.ts');
-        expect(instruction(a0.find(t => t.slug === 'a0-rendezvous-drifter-bare-15m')!)).not.toContain('/qb/aids/');
+        const bare = instruction(a0.find(t => t.slug === 'a0-rendezvous-drifter-bare-15m')!);
+        expect(bare).not.toContain('/qb/aids/board.ts');
+        expect(bare).toContain('/qb/aids/report.ts');
         expect(testSh(aided)).toContain('/qb/collect-artifacts.sh');
         expect(testSh(aided)).toContain('"id":2351');
     });
