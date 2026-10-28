@@ -47,5 +47,6 @@ REPORT_COPY
 cp /var/qb/inbox/*.jsonl "$OUT/partners/" 2>/dev/null
 cp /app/.rs-sdk-commit "$OUT/rs-sdk-commit.txt" 2>/dev/null
 env | grep -E '^(QB_|NODE_TICKRATE)' | sort > "$OUT/env.txt"
+bun /qb/check-run.ts "$OUT/events.jsonl" "$OUT/partners" "${QB_AGENT:-agent}" | tee -a "$OUT/WARNINGS.txt"
 date -u +%Y-%m-%dT%H:%M:%SZ > "$OUT/qb_end.txt"
 exit 0
