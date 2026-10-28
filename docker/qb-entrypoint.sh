@@ -26,7 +26,7 @@ if [ -f /qb/partners.json ]; then
     mkdir -p "/app/bots/$USERNAME"
     # SERVER is the engine's web origin (the lite client fetches the game cache from it, port 8888);
     # GATEWAY_URL keeps the SDK and lite client on the gateway (7780) instead of deriving it from SERVER.
-    printf 'BOT_USERNAME=%s\nPASSWORD=test\nSERVER=localhost:8888\nGATEWAY_URL=ws://localhost:7780\nSHOW_CHAT=true\n' "$USERNAME" > "/app/bots/$USERNAME/bot.env"
+    printf 'BOT_USERNAME=%s\nPASSWORD=test\nSERVER=localhost:8888\nGATEWAY_URL=ws://localhost:7780\nSHOW_CHAT=true\nTELEMETRY=false\n' "$USERNAME" > "/app/bots/$USERNAME/bot.env"
     chmod 700 "/app/bots/$USERNAME" && chmod 600 "/app/bots/$USERNAME/bot.env"
     (cd /app/server/webclient && nohup bun src/lite/runner.ts "$USERNAME" > "/logs/partners/$USERNAME.lite.log" 2>&1 &)
     for i in $(seq 1 90); do grep -q "logged into" "/logs/partners/$USERNAME.lite.log" 2>/dev/null && break; sleep 1; done

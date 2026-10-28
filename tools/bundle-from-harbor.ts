@@ -2,7 +2,7 @@
 /**
  * Turn finished Harbor trials into QuestBench run bundles, redact them, and run ingest checks.
  *   bun tools/bundle-from-harbor.ts <harbor-job-dir> [--out bundles] [--handle <you>] [--licence CC-BY-4.0]
- *                                   [--image-digest sha256:...] [--tasks tasks]
+ *                                   [--image-digest sha256:...] [--tasks tasks] [--include-recording]
  *
  * Harbor brings back only /logs/verifier from the container (plus agent logs and result.json on
  * the host side), so tests/test.sh copies everything QuestBench needs into /logs/verifier/qb/ via
@@ -54,7 +54,7 @@ function readEnv(file: string): Record<string, string> {
 
 const TEXT_EXT = /\.(json|jsonl|md|txt|log|ts|js|sh|toml|ya?ml)$/i;
 
-export interface BundleOptions { out: string; handle: string; licence: string; imageDigest?: string; tasksDir: string }
+export interface BundleOptions { out: string; handle: string; licence: string; imageDigest?: string; tasksDir: string; includeRecording?: boolean }
 
 export function bundleTrial(trialDir: string, jobDir: string, opts: BundleOptions) {
     const qb = join(trialDir, 'verifier', 'qb');
@@ -90,9 +90,11 @@ export function bundleTrial(trialDir: string, jobDir: string, opts: BundleOption
     writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
     if (existsSync(join(qb, 'events.jsonl'))) cpSync(join(qb, 'events.jsonl'), join(dir, 'events.jsonl')); else writeFileSync(join(dir, 'events.jsonl'), '');
     cpSync(join(qb, 'saves'), join(dir, 'saves'), { recursive: true });
-    for (const extra of ['partners', 'board.jsonl', 'trade_ledger.jsonl', 'WARNINGS.txt']) if (existsSync(join(qb, extra))) cpSync(join(qb, extra), join(dir, extra), { recursive: true });
+    for (const extra of ['partners', 'board.jsonl', 'trade_ledger.jsonl', 'WARNINGS.txt', 'reports.jsonl']) if (existsSync(join(qb, extra))) cpSync(join(qb, extra), join(dir, extra), { recursive: true });
     if (existsSync(join(trialDir, 'verifier', 'reward.json'))) cpSync(join(trialDir, 'verifier', 'reward.json'), join(dir, 'verdict.json'));
     if (existsSync(join(trialDir, 'agent'))) cpSync(join(trialDir, 'agent'), join(dir, 'agent'), { recursive: true });
+    // Screen recordings cannot be text-redacted. Opt in only after reviewing the video for secrets.
+    if (opts.includeRecording && existsSync(join(trialDir, 'verifier', 'recording.mp4'))) cpSync(join(trialDir, 'verifier', 'recording.mp4'), join(dir, 'recording.mp4'));
 
     // Redact every text file except the hash-chained event log (editing it would break the chain;
     // it only holds in-game text, which the server already filtered) and the manifest.
@@ -111,8 +113,8 @@ if (import.meta.main) {
     const args = process.argv.slice(2);
     const opt = (k: string, d?: string) => { const i = args.indexOf(`--${k}`); return i >= 0 ? args[i + 1] : d; };
     const jobDir = args.find(a => !a.startsWith('--'));
-    if (!jobDir) { console.error('usage: bundle-from-harbor.ts <harbor-job-dir> [--out bundles] [--handle you] [--licence CC-BY-4.0] [--image-digest sha256:..] [--tasks tasks]'); process.exit(2); }
-    const opts: BundleOptions = { out: opt('out', 'bundles')!, handle: opt('handle', 'anonymous')!, licence: opt('licence', 'CC-BY-4.0')!, imageDigest: opt('image-digest'), tasksDir: opt('tasks', 'tasks')! };
+    if (!jobDir) { console.error('usage: bundle-from-harbor.ts <harbor-job-dir> [--out bundles] [--handle you] [--licence CC-BY-4.0] [--image-digest sha256:..] [--tasks tasks] [--include-recording]'); process.exit(2); }
+    const opts: BundleOptions = { out: opt('out', 'bundles')!, handle: opt('handle', 'anonymous')!, licence: opt('licence', 'CC-BY-4.0')!, imageDigest: opt('image-digest'), tasksDir: opt('tasks', 'tasks')!, includeRecording: args.includes('--include-recording') };
     const trials = findTrials(jobDir);
     console.log(`${trials.length} trials in ${jobDir}`);
     for (const t of trials) console.log(JSON.stringify(bundleTrial(t, jobDir, opts)));

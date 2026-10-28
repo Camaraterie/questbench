@@ -30,6 +30,20 @@ cp /logs/tracking/qb_start.txt "$OUT/" 2>/dev/null
 cp /logs/partners/*.jsonl /logs/partners/*.log "$OUT/partners/" 2>/dev/null
 cat /logs/partners/WARNINGS.txt >> "$OUT/WARNINGS.txt" 2>/dev/null
 cp /var/qb/board/*.jsonl "$OUT/" 2>/dev/null
+# Open without following a symlink, then check and read that same descriptor.
+# O_NONBLOCK also lets us reject a FIFO without waiting for a writer.
+bun - /var/qb/reports/reports.jsonl "$OUT/reports.jsonl" <<'REPORT_COPY'
+import { closeSync, constants, fstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+let fd;
+try {
+    fd = openSync(process.argv[2], constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    if (fstatSync(fd).isFile()) writeFileSync(process.argv[3], readFileSync(fd));
+} catch {
+    // Reports are optional; missing files and unsafe file types are not collected.
+} finally {
+    if (fd !== undefined) closeSync(fd);
+}
+REPORT_COPY
 cp /var/qb/inbox/*.jsonl "$OUT/partners/" 2>/dev/null
 cp /app/.rs-sdk-commit "$OUT/rs-sdk-commit.txt" 2>/dev/null
 env | grep -E '^(QB_|NODE_TICKRATE)' | sort > "$OUT/env.txt"

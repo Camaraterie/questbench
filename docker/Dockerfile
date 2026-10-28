@@ -24,11 +24,15 @@ COPY docker/qb-entrypoint.sh /qb-entrypoint.sh
 COPY docker/collect-artifacts.sh /qb/collect-artifacts.sh
 
 # 3. Multi-agent scenarios need chat: RuneBench's agent bot.env ships SHOW_CHAT=false.
+#    TELEMETRY=false stops rs-sdk's bug-report tool posting to the public demo server from benchmark
+#    runs; agents file reports with /qb/aids/report.ts instead (collected per run).
+ENV TELEMETRY=false
 RUN sed -i 's/^SHOW_CHAT=.*/SHOW_CHAT=true/' /app/bots/agent/bot.env \
-    && grep -q '^SHOW_CHAT=true' /app/bots/agent/bot.env
+    && grep -q '^SHOW_CHAT=true' /app/bots/agent/bot.env \
+    && (grep -q '^TELEMETRY=' /app/bots/agent/bot.env || echo 'TELEMETRY=false' >> /app/bots/agent/bot.env)
 
 # 4. Shared notice board (coordination-aids condition): agent-writable, append-only by convention.
-RUN mkdir -p /var/qb/board /var/qb/inbox && chmod 1777 /var/qb/board && chmod 755 /var/qb/inbox \
+RUN mkdir -p /var/qb/board /var/qb/inbox /var/qb/reports && chmod 1777 /var/qb/board /var/qb/reports && chmod 755 /var/qb/inbox \
     && chown -R root:root /qb && chmod 700 /qb-entrypoint.sh /qb/collect-artifacts.sh \
     # Partner policies and helpers are hidden from the agent (it must not read its counterpart's
     # strategy); the aids stay world-readable because the agent uses them in the aided condition.

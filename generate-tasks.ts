@@ -101,7 +101,8 @@ cd /tests && bun run ${t.scenario.verifier.replace('.ts', '.js')}
 export function instruction(t: ResolvedTask): string {
     const llm = llmRole(t);
     const aidsText = t.aids ? readFileSync(join(ROOT, 'aids', 'INSTRUCTIONS.md'), 'utf8') : '';
-    return `${llm.brief}\n\nYou have ${t.minutes} minutes. You control the bot "${llm.username}" via the rs-agent MCP server (execute_code with bot_name: "${llm.username}").\n${aidsText}`;
+    const reportText = `\nIf the SDK or this environment seems broken, file a short note with \`bun /qb/aids/report.ts "<what happened>"\` and keep going. Do not use sdk/bug-report.ts.\n`;
+    return `${llm.brief}\n\nYou have ${t.minutes} minutes. You control the bot "${llm.username}" via the rs-agent MCP server (execute_code with bot_name: "${llm.username}").\n${reportText}${aidsText}`;
 }
 
 async function bundleVerifier(entry: string, outDir: string) {
