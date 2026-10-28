@@ -69,6 +69,19 @@ try {
     const count = (sdk: any, id: number) => sdk.getState().inventory.filter((x: any) => x.id === id).reduce((n: number, x: any) => n + x.count, 0);
     check(count(buyer, 995) === 850 && count(buyer, 2351) === 5 && count(seller, 995) === 150 && count(seller, 2351) === 0, 'Unexpected final inventories');
     console.log(JSON.stringify({ ok: true, pm: 'both directions, multiple chunks', movement: 'both spawns', trade: '150 coins for 5 iron bars' }));
+    const hold = Math.min(3600, Math.max(0, Number(process.env.QB_SMOKE_HOLD_SECS ?? 0)));
+    if (hold) {
+        mkdirSync('/logs/tracking', { recursive: true });
+        writeFileSync('/logs/tracking/qb_start.txt', new Date().toISOString());
+        console.log(`[smoke] Read-only viewer preview for ${hold}s; no LLM is running`);
+        const end = Date.now() + hold * 1000;
+        while (Date.now() < end) {
+            for (const dz of [3, 0]) {
+                await Promise.all(bots.map((bot: any, i: number) => bot.walkTo(a0duo.roles[i].save.position.x, a0duo.roles[i].save.position.z + dz, 0)));
+                await Bun.sleep(3000);
+            }
+        }
+    }
 } finally {
     for (const sdk of sdks) sdk.disconnect();
     for (const proc of processes) proc.kill();

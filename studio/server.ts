@@ -12,14 +12,18 @@
  * gitignored .env.local at the repo root; Studio loads it for runs it launches.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { parseJsonl, parseTrajectory, partnerProgress } from './parse';
+import { observerRelay } from './observer';
 
-const ROOT = resolve(import.meta.dir, '..');
+const ROOT = resolve(process.env.QB_STUDIO_ROOT ?? resolve(import.meta.dir, '..'));
 const PORT = Number(process.env.QB_STUDIO_PORT ?? 4747);
 const BUNDLES = join(ROOT, 'bundles');
 const RUNS_DIR = resolve(ROOT, process.env.QB_RUNS_DIR ?? '../questbench-runs');
 const MOCK = process.env.QB_STUDIO_MOCK ? resolve(process.env.QB_STUDIO_MOCK) : null;
+const VIEWER = resolve(ROOT, 'vendor/viewer-build');
+const VIEWER_CACHE = resolve(ROOT, 'vendor/viewer-cache');
+const observer = observerRelay(findContainer);
 
 // ── .env.local (gitignored) for launched runs ──
 const launchEnv: Record<string, string> = { ...process.env } as Record<string, string>;
@@ -52,6 +56,7 @@ const TASK_RE = /^[a-e]\d-[\w-]+__/i;
 let containerCache = { at: 0, name: null as string | null };
 export async function findContainer(): Promise<string | null> {
     if (MOCK) return 'mock';
+    if (process.env.QB_STUDIO_CONTAINER) return process.env.QB_STUDIO_CONTAINER;
     if (Date.now() - containerCache.at < 5000) return containerCache.name;
     const r = await run(['docker', 'ps', '--format', '{{.Names}}']);
     containerCache = { at: Date.now(), name: r.ok ? r.out.split('\n').find(n => TASK_RE.test(n)) ?? null : null };
@@ -192,8 +197,18 @@ function preflight() {
 
 let launch: { proc: ReturnType<typeof Bun.spawn> | null; log: string; startedAt: string | null; args: string[] } = { proc: null, log: '', startedAt: null, args: [] };
 const MODEL_RE = /^[\w.-]+\/[\w.:-]+$/;
+let startingLaunch = false;
 async function startLaunch(body: { variant?: string; all?: boolean; trials?: number; publish?: boolean; duo?: boolean; seatModels?: Record<string, string> }) {
-    if (launch.proc && launch.proc.exitCode === null) return { ok: false, error: 'A run is already in progress' };
+    if (startingLaunch || (launch.proc && launch.proc.exitCode === null)) return { ok: false, error: 'A run is already in progress' };
+    startingLaunch = true;
+    try {
+    // Disposable viewer previews must not compete with a scored trial for CPU. Only touch
+    // containers explicitly labeled as our preview, never arbitrary running experiments.
+    const previews = await run(['docker', 'ps', '-q', '--filter', 'label=questbench.observer-preview=1']);
+    if (previews.ok) for (const id of previews.out.trim().split(/\s+/).filter(id => /^[a-f0-9]{12,64}$/.test(id))) {
+        const stopped = await run(['docker', 'stop', '-t', '2', id]);
+        if (!stopped.ok) return { ok: false, error: 'Could not stop the observer preview before the trial' };
+    }
     const trials = String(Math.max(1, Math.min(10, body.trials ?? 1)));
     const args = body.duo
         ? ['./scripts/run-pilot.sh', '--duo', '-k', trials]
@@ -209,6 +224,7 @@ async function startLaunch(body: { variant?: string; all?: boolean; trials?: num
     const pump = async (s: ReadableStream<Uint8Array>) => { const d = new TextDecoder(); for await (const ch of s) { launch.log += d.decode(ch).replace(/\x1b\[[0-9;]*[A-Za-z]/g, ''); if (launch.log.length > 200_000) launch.log = launch.log.slice(-150_000); } };
     pump(proc.stdout); pump(proc.stderr);
     return { ok: true };
+    } finally { startingLaunch = false; }
 }
 
 async function stopLaunch() {
@@ -230,7 +246,19 @@ const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { sta
 export function handle(req: Request): Response | Promise<Response> {
     const url = new URL(req.url);
     const p = url.pathname;
-    if (p === '/' || p === '/index.html') return new Response(Bun.file(join(import.meta.dir, 'index.html')));
+    if (p === '/' || p === '/index.html') return new Response(Bun.file(join(import.meta.dir, 'index.html')), { headers: { 'cross-origin-opener-policy': 'same-origin', 'cross-origin-embedder-policy': 'require-corp' } });
+    if (p === '/observer-ui.js') return new Response(Bun.file(join(import.meta.dir, 'observer-ui.js')));
+    if (p === '/api/observer') return json({ ...observer.status(), ready: existsSync(join(VIEWER, 'index.html')) && existsSync(join(VIEWER_CACHE, 'caches.json')) });
+    if (p === '/viewer' || p.startsWith('/viewer/')) {
+        const cache = p.startsWith('/viewer/caches/');
+        const base = cache ? VIEWER_CACHE : VIEWER;
+        let relative: string;
+        try { relative = decodeURIComponent(cache ? p.slice('/viewer/caches/'.length) : p.slice('/viewer/'.length)); } catch { return new Response('bad path', { status: 400 }); }
+        if (p === '/viewer' || p === '/viewer/') relative = 'index.html';
+        const file = resolve(base, relative);
+        if (!file.startsWith(base + sep) || !existsSync(file) || !statSync(file).isFile()) return new Response('Viewer asset unavailable. Run bun run viewer:build.', { status: 404 });
+        return new Response(Bun.file(file), { headers: { 'cross-origin-opener-policy': 'same-origin', 'cross-origin-embedder-policy': 'require-corp', 'cache-control': cache ? 'public, max-age=86400' : 'no-cache' } });
+    }
     if (p === '/api/live') return liveSnapshot().then(s => json(s));
     if (p === '/api/live/screen.jpg') return screenshot().then(img => img ? new Response(img, { headers: { 'content-type': 'image/jpeg', 'cache-control': 'no-store' } }) : new Response('no screen', { status: 404 }));
     if (p === '/api/runs') return json(runRefs().map(runSummary).sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))));
@@ -251,7 +279,14 @@ export function handle(req: Request): Response | Promise<Response> {
 }
 
 if (import.meta.main) {
-    Bun.serve({ port: PORT, hostname: '127.0.0.1', fetch: handle });
+    Bun.serve({ port: PORT, hostname: '127.0.0.1', fetch(req, server) {
+        const url = new URL(req.url);
+        if (url.pathname === '/observer-feed') {
+            if (req.headers.get('origin') !== url.origin) return new Response('Same-origin observer only', { status: 403 });
+            return server.upgrade(req, { data: { area: { x: 3174, z: 3170, w: 96, h: 96 } } }) ? undefined : new Response('WebSocket required', { status: 426 });
+        }
+        return handle(req);
+    }, websocket: observer.websocket });
     const url = `http://localhost:${PORT}`;
     console.log(`QuestBench Studio → ${url}${MOCK ? `  (mock: ${MOCK})` : ''}`);
     // Open the browser: WSL -> Windows default browser; macOS/Linux fallbacks.

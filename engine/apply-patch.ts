@@ -20,6 +20,15 @@ interface FilePatch { file: string; imports: string[]; edits: Edit[] }
 
 const PATCHES: FilePatch[] = [
     {
+        file: 'web/index.ts',
+        imports: ["import { observerResponse } from '#/engine/entity/tracking/Observer.js';"],
+        edits: [{
+            anchor: /(\n(\s*)async function handleRequest\(req: Request, server: Bun\.Server, url: URL\): Promise<Response \| undefined> \{)/,
+            where: 'after',
+            insert: "\n$2    if (process.env.QB_OBSERVER === '1' && req.method === 'GET' && url.pathname === '/qb-observer') return observerResponse(World, url); " + MARK,
+        }],
+    },
+    {
         // Trades: the BOTH_MOVEINV trade-confirm block, where both players are in scope.
         file: 'engine/script/handlers/InvOps.ts',
         imports: [IMPORT],
@@ -109,6 +118,7 @@ export function patchText(file: string, text: string): string {
 if (import.meta.main) {
     const eventLog = join(SRC, 'engine/entity/tracking/EventLog.ts');
     copyFileSync(join(import.meta.dir, 'src/EventLog.ts'), eventLog);
+    copyFileSync(join(import.meta.dir, 'src/Observer.ts'), join(SRC, 'engine/entity/tracking/Observer.ts'));
     for (const p of PATCHES) {
         const f = join(SRC, p.file);
         if (!existsSync(f)) throw new Error(`missing ${f}`);

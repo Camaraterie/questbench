@@ -21,6 +21,21 @@ body{font-family:var(--font-body);color:var(--ink);background:#fff}
 .panel-box>.body{padding:.7rem .9rem;overflow:auto}
 .grid3{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr) minmax(0,.9fr);gap:1rem;height:calc(100vh - 230px);min-height:520px}
 .grid3 .panel-box .body{flex:1}
+.observer{margin:0 0 1.2rem;background:#11191b;color:#e7efeb;border-radius:10px;overflow:hidden}
+.observer-toolbar,.camera-toolbar{display:flex;align-items:center;gap:.65rem;flex-wrap:wrap;padding:.65rem .9rem}
+.observer-toolbar{border-bottom:1px solid #ffffff20;justify-content:space-between}
+.observer-toolbar strong{color:#fff;font-family:var(--font-display)}
+.observer-status{font:12px var(--font-mono);color:#a9bcb5}
+.camera-wall{display:grid;grid-template-columns:1fr 1fr;min-height:440px}
+.camera-pane+ .camera-pane{border-left:1px solid #ffffff20}
+.camera-pane{min-width:0;display:flex;flex-direction:column}
+.camera-pane iframe{display:block;flex:1;width:100%;min-height:390px;border:0;background:#101816}
+.camera-toolbar{font-size:12px;justify-content:space-between;background:#1b2627}
+.camera-toolbar select,.observer button{font:inherit;color:inherit;background:#243436;border:1px solid #ffffff30;border-radius:5px;padding:.3rem .5rem;cursor:pointer}
+.observer button:hover{background:#344a46}.observer button:focus-visible,.camera-toolbar select:focus-visible{outline:2px solid #9fdbc0;outline-offset:2px}
+.observer-hint{font-size:11px;color:#b1c2ba;padding:.4rem .9rem;border-top:1px solid #ffffff20}
+.observer:fullscreen{width:100vw;height:100vh;border-radius:0;display:flex;flex-direction:column}.observer:fullscreen .camera-wall{flex:1}.observer:fullscreen iframe{height:100%}
+@media(max-width:900px){.camera-wall{grid-template-columns:1fr}.camera-pane+ .camera-pane{border-left:0;border-top:1px solid #ffffff20}}
 @media(max-width:1100px){.grid3{grid-template-columns:1fr;height:auto}.grid3 .panel-box .body{max-height:60vh}}
 .step{padding:.45rem 0;border-bottom:1px dashed var(--line);font-size:.88rem}
 .step:last-child{border-bottom:0}
@@ -79,6 +94,14 @@ table.runs tr{cursor:pointer}
 </div>
 
 <section class="section" id="tab-live">
+  <div class="observer" id="observer">
+    <div class="observer-toolbar"><div><strong>World observer</strong> <span class="observer-status" id="observer-status" role="status">Preparing renderer…</span></div><button id="observer-fullscreen" type="button">Expand cameras</button></div>
+    <div class="camera-wall" id="camera-wall">
+      <div class="camera-pane"><div class="camera-toolbar"><label>Camera 1 <select id="camera-target-a"><option value="agent">Follow agent</option><option value="partner01">Follow partner01</option><option value="free">Free camera</option></select></label><span><button type="button" data-overhead="a">Top view</button> <label><input type="checkbox" data-roofs="a" checked> Hide roofs</label></span></div><iframe id="camera-a" title="World observer camera 1" allow="fullscreen" loading="eager"></iframe></div>
+      <div class="camera-pane"><div class="camera-toolbar"><label>Camera 2 <select id="camera-target-b"><option value="partner01">Follow partner01</option><option value="agent">Follow agent</option><option value="free">Free camera</option></select></label><span><button type="button" data-overhead="b">Top view</button> <label><input type="checkbox" data-roofs="b" checked> Hide roofs</label></span></div><iframe id="camera-b" title="World observer camera 2" allow="fullscreen" loading="eager"></iframe></div>
+    </div>
+    <div class="observer-hint">Read-only local world · drag to orbit · Alt + scroll to zoom · choose Free camera to explore · detail sampled 4 times per second</div>
+  </div>
   <div id="live-empty" class="empty is-hidden"><p class="title is-5">No trial is running</p><p>Start one from the <a data-goto="launch">Launch</a> tab, or open a finished run under <a data-goto="runs">Runs</a>.</p></div>
   <div id="live-header" class="level is-hidden" style="margin-bottom:.8rem">
     <div class="level-left"><div class="level-item"><span class="tag is-dark" id="live-task"></span></div><div class="level-item"><span class="tag is-light" id="live-aids"></span></div></div>
@@ -86,8 +109,10 @@ table.runs tr{cursor:pointer}
   </div>
   <div class="grid3 is-hidden" id="live-grid">
     <div class="panel-box"><header><span id="lane-a-title">Agent timeline</span><span><label class="checkbox is-size-7 has-text-grey" style="margin-right:.5rem"><input type="checkbox" id="live-hide-r"> hide reasoning</label><span class="cost" id="live-cost"></span></span></header><div class="body" id="live-steps"></div></div>
-    <div class="panel-box"><header><span>Game view</span><span class="has-text-grey is-size-7">click to enlarge · refreshes every 2 s</span></header><div class="body">
+    <div class="panel-box"><header><span>Server record</span><span class="has-text-grey is-size-7">chat · PMs · trades</span></header><div class="body">
+      <details id="client-screen"><summary>Agent client screenshot</summary>
       <button type="button" class="screen" id="live-screen" aria-label="Enlarge live screenshot"><span>waiting for screen…</span></button>
+      </details>
       <div id="track-wrap"><div class="studio-h" style="margin-top:.8rem;font-weight:500">Partner progress</div>
       <div class="track" id="live-track"></div></div>
       <div id="live-alerts"></div>
@@ -235,7 +260,7 @@ async function pollLive() {
   if (s.warnings) alerts.push(`<div class="notification is-warning is-light notice">${esc(s.warnings)}</div>`);
   if ((s.reports||[]).length) alerts.push(`<div class="notification is-info is-light notice"><b>Agent reports</b><br>${s.reports.map(r => '• ' + esc(r.text)).join('<br>')}</div>`);
   $('live-alerts').innerHTML = alerts.join('');
-  if (!DEMO && !shotLoading) {
+  if (!DEMO && !shotLoading && $('client-screen').open !== false) {
     shotLoading = true;
     const img = new Image(); let active = true;
     const finish = () => { if (!active) return false; active = false; clearTimeout(timer); img.onload = img.onerror = null; shotLoading = false; return true; };
@@ -309,5 +334,6 @@ async function pollLaunch() {
 setInterval(() => { if (tab === 'live') pollLive(); if (tab === 'launch') pollLaunch(); }, 2000);
 pollLive();
 </script>
+<script type="module" src="/observer-ui.js"></script>
 </body>
 </html>
