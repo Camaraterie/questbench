@@ -4,6 +4,7 @@
  */
 export type Step =
     | { kind: 'thought'; t: number | null; text: string }
+    | { kind: 'reasoning'; t: number | null; text: string; secs?: number }
     | { kind: 'tool'; t: number | null; name: string; code: string; status: 'ok' | 'error' | 'running'; output: string; error?: string; secs?: number; chat: string[] }
     | { kind: 'cost'; t: number | null; tokensIn: number; tokensOut: number; reasoning: number; cached: number; cost: number; total: number }
     | { kind: 'note'; t: number | null; text: string };
@@ -23,14 +24,29 @@ export function resultOnly(out: string): string {
     return (out.split(/\n?── World State ──/)[0] ?? '').replace(/^── Result ──\n?/, '').trim();
 }
 
-export function parseTrajectory(text: string): Step[] {
+/** Reasoning traces exported from OpenCode's session database (docker/dump-reasoning.ts). */
+export interface Reasoning { at: number; end?: number | null; text: string }
+
+/**
+ * Agent steps from the OpenCode JSON log, with reasoning traces (which that log omits) merged in
+ * by timestamp: each one goes before the first logged event that started after it.
+ */
+export function parseTrajectory(text: string, reasoning: Reasoning[] = []): Step[] {
     const steps: Step[] = [];
     let t0: number | null = null, total = 0;
     const rel = (ms?: number) => { if (!ms) return null; if (t0 === null) t0 = ms; return Math.max(0, Math.round((ms - t0) / 1000)); };
+    const pending = reasoning.filter(r => r && r.text && Number.isFinite(r.at)).sort((a, b) => a.at - b.at);
+    const flush = (before: number) => {
+        while (pending.length && pending[0]!.at <= before) {
+            const r = pending.shift()!;
+            steps.push({ kind: 'reasoning', t: rel(r.at), text: r.text, secs: r.end ? (r.end - r.at) / 1000 : undefined });
+        }
+    };
     for (const line of text.split('\n')) {
         if (!line.trim()) continue;
         let e: any; try { e = JSON.parse(line); } catch { e = undefined; }
         if (e === null || typeof e !== 'object' || Array.isArray(e)) { steps.push({ kind: 'note', t: null, text: line.trim() }); continue; }
+        if (typeof e.timestamp === 'number') flush(e.timestamp);
         const p = e.part ?? {};
         const t = rel(e.timestamp);
         if (e.type === 'text' && String(p.text ?? '').trim()) steps.push({ kind: 'thought', t, text: String(p.text).trim() });
@@ -50,6 +66,7 @@ export function parseTrajectory(text: string): Step[] {
             steps.push({ kind: 'cost', t, tokensIn: tk.input ?? 0, tokensOut: tk.output ?? 0, reasoning: tk.reasoning ?? 0, cached: tk.cache?.read ?? 0, cost: Number(p.cost ?? 0), total });
         }
     }
+    flush(Infinity);
     return steps;
 }
 

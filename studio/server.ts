@@ -38,64 +38,98 @@ function sh(cmd: string[], opts: { cwd?: string } = {}): { ok: boolean; out: str
 }
 
 // ── Live container access ──
+// Every poll used to make ~10 blocking `docker exec` calls (~2.5 s on WSL, stalling the whole server).
+// Now: one async exec for all files plus one for reasoning, cached briefly and shared by every tab.
+async function run(cmd: string[], stdin?: string, timeout = 10_000): Promise<{ ok: boolean; out: string; bytes: Uint8Array }> {
+    try {
+        const p = Bun.spawn(cmd, { stdin: stdin === undefined ? 'ignore' : new TextEncoder().encode(stdin), stdout: 'pipe', stderr: 'ignore', timeout, killSignal: 'SIGKILL' });
+        const bytes = new Uint8Array(await new Response(p.stdout).arrayBuffer());
+        return { ok: (await p.exited) === 0, out: new TextDecoder().decode(bytes), bytes };
+    } catch { return { ok: false, out: '', bytes: new Uint8Array() }; }
+}
 const TASK_RE = /(a0-rendezvous|a1-shield-of-arrav|c1-hidden-role-trade)/i;
-export function findContainer(): string | null {
+let containerCache = { at: 0, name: null as string | null };
+export async function findContainer(): Promise<string | null> {
     if (MOCK) return 'mock';
-    const r = sh(['docker', 'ps', '--format', '{{.Names}}']);
-    return r.ok ? r.out.split('\n').find(n => TASK_RE.test(n)) ?? null : null;
+    if (Date.now() - containerCache.at < 5000) return containerCache.name;
+    const r = await run(['docker', 'ps', '--format', '{{.Names}}']);
+    containerCache = { at: Date.now(), name: r.ok ? r.out.split('\n').find(n => TASK_RE.test(n)) ?? null : null };
+    return containerCache.name;
 }
-function readIn(container: string, path: string): string {
+const LIVE_FILES = {
+    agent: '/logs/agent/opencode*.txt', partner: '/logs/partners/partner01.jsonl', start: '/logs/tracking/qb_start.txt',
+    warnings: '/logs/partners/WARNINGS.txt', lite: '/logs/partners/partner01.lite.log', events: '/logs/tracking/events.jsonl',
+    reports: '/var/qb/reports/reports.jsonl', board: '/var/qb/board/board.jsonl',
+};
+type LiveFiles = Record<keyof typeof LIVE_FILES | 'env' | 'reasoning', string>;
+const SEP = '\n<<<QB-STUDIO:';
+async function readLive(container: string): Promise<LiveFiles> {
     if (MOCK) {
-        const rel = path.replace(/^\//, '');
-        if (rel.includes('*')) return [...new Bun.Glob(rel).scanSync({ cwd: MOCK })].map(f => readFileSync(join(MOCK, f), 'utf8')).join('\n');
-        const p = join(MOCK, rel); return existsSync(p) ? readFileSync(p, 'utf8') : '';
+        const read = (path: string) => {
+            const rel = path.replace(/^\//, '');
+            if (rel.includes('*')) return [...new Bun.Glob(rel).scanSync({ cwd: MOCK })].map(f => readFileSync(join(MOCK, f), 'utf8')).join('\n');
+            const p = join(MOCK, rel); return existsSync(p) ? readFileSync(p, 'utf8') : '';
+        };
+        const out = Object.fromEntries(Object.entries(LIVE_FILES).map(([k, p]) => [k, read(p)])) as LiveFiles;
+        return { ...out, env: 'QB_TASK=a0-rendezvous-punctual-bare-15m\nQB_DURATION_SECS=900', reasoning: read('/logs/agent/reasoning.jsonl') };
     }
-    const r = sh(['docker', 'exec', container, 'sh', '-c', `cat ${path} 2>/dev/null`]);
-    return r.ok ? r.out : '';
+    const script = [`printf '${SEP}env>>>\\n'; env | grep ^QB_`, ...Object.entries(LIVE_FILES).map(([k, p]) => `printf '${SEP}${k}>>>\\n'; cat ${p} 2>/dev/null`)].join('; ');
+    const [files, reasoning] = await Promise.all([
+        run(['docker', 'exec', container, 'sh', '-c', script]),
+        run(['docker', 'exec', '-i', container, 'bun', '-', '/home/agent/.local/share/opencode/opencode.db'], DUMP_REASONING),
+    ]);
+    const out: Record<string, string> = { reasoning: reasoning.out };
+    for (const chunk of files.out.split(SEP).slice(1)) { const i = chunk.indexOf('>>>\n'); if (i > 0) out[chunk.slice(0, i)] = chunk.slice(i + 4); }
+    return out as LiveFiles;
 }
-function liveEnv(container: string): Record<string, string> {
-    if (MOCK) return { QB_TASK: 'a0-rendezvous-punctual-bare-15m', QB_DURATION_SECS: '900' };
-    const r = sh(['docker', 'exec', container, 'sh', '-c', 'env | grep ^QB_']);
-    return Object.fromEntries(r.out.split('\n').filter(l => l.includes('=')).map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
-}
+// Images built before docker/dump-reasoning.ts existed lack it, so Studio pipes its own copy in.
+const DUMP_REASONING = readFileSync(join(ROOT, 'docker', 'dump-reasoning.ts'), 'utf8');
 
-export function liveSnapshot() {
-    const c = findContainer();
+async function buildSnapshot() {
+    const c = await findContainer();
     if (!c) return { live: false };
-    const env = liveEnv(c);
-    const agentLog = readIn(c, '/logs/agent/opencode*.txt');
-    const partner = parseJsonl(readIn(c, '/logs/partners/partner01.jsonl'));
-    const startedAt = readIn(c, '/logs/tracking/qb_start.txt').trim();
-    const warnings = readIn(c, '/logs/partners/WARNINGS.txt').trim();
-    const lite = readIn(c, '/logs/partners/partner01.lite.log');
+    const f = await readLive(c);
+    const env = Object.fromEntries((f.env ?? '').split('\n').filter(l => l.includes('=')).map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+    const partner = parseJsonl(f.partner ?? ''), lite = f.lite ?? '';
     return {
-        live: true, container: c, task: env.QB_TASK ?? '', aids: env.QB_AIDS === '1', durationSecs: Number(env.QB_DURATION_SECS ?? 900), startedAt,
-        steps: parseTrajectory(agentLog),
-        events: parseJsonl(readIn(c, '/logs/tracking/events.jsonl')),
+        live: true, container: c, task: env.QB_TASK ?? '', aids: env.QB_AIDS === '1', durationSecs: Number(env.QB_DURATION_SECS ?? 900), startedAt: (f.start ?? '').trim(),
+        steps: parseTrajectory(f.agent ?? '', parseJsonl(f.reasoning ?? '')),
+        events: parseJsonl(f.events ?? ''),
         partner, progress: partnerProgress(partner),
         partnerLoggedIn: /logged into/.test(lite), partnerError: /ConnectionRefused|error:/i.test(lite) && !/logged into/.test(lite) ? lite.split('\n').filter(Boolean).slice(-3).join('\n') : null,
-        reports: parseJsonl(readIn(c, '/var/qb/reports/reports.jsonl')),
-        board: parseJsonl(readIn(c, '/var/qb/board/board.jsonl')),
-        warnings: warnings || null,
+        reports: parseJsonl(f.reports ?? ''), board: parseJsonl(f.board ?? ''),
+        warnings: (f.warnings ?? '').trim() || null,
     };
 }
-
-let shotCache: { at: number; png: Uint8Array | null } = { at: 0, png: null };
-function screenshot(): Uint8Array | null {
-    if (Date.now() - shotCache.at < 1000) return shotCache.png;
-    const c = findContainer();
-    if (!c || MOCK) return null;
-    const r = sh(['docker', 'exec', c, 'sh', '-c', 'ffmpeg -loglevel error -f x11grab -video_size 800x600 -i :99 -frames:v 1 -f image2pipe -vcodec png - 2>/dev/null']);
-    shotCache = { at: Date.now(), png: r.ok && r.bytes && r.bytes.length > 100 ? r.bytes : null };
-    return shotCache.png;
+function cached<T>(build: () => Promise<T>): () => Promise<T> {
+    let p: Promise<T> | undefined, settledAt = 0, pending = false;
+    return () => {
+        if (!p || (!pending && Date.now() - settledAt > 1500)) {
+            pending = true;
+            p = build().finally(() => { pending = false; settledAt = Date.now(); });
+        }
+        return p;
+    };
 }
+const snapshot = cached(buildSnapshot);
+export function liveSnapshot(): Promise<any> {
+    return snapshot();
+}
+
+// One JPEG grab of the virtual display at a time; concurrent requests share it.
+const screenshot = cached(async (): Promise<Uint8Array | null> => {
+    const c = await findContainer();
+    if (!c || MOCK) return null;
+    const r = await run(['docker', 'exec', c, 'timeout', '-s', 'KILL', '8s', 'ffmpeg', '-loglevel', 'error', '-f', 'x11grab', '-video_size', '800x600', '-i', ':99', '-frames:v', '1', '-q:v', '4', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-']);
+    return r.ok && r.bytes.length > 100 ? r.bytes : null;
+});
 
 // ── Finished runs: local bundles + the results repo index ──
 interface RunRef { id: string; dir: string; source: 'local' | 'results-repo' }
 function runRefs(): RunRef[] {
     const refs: RunRef[] = [];
     if (existsSync(BUNDLES)) for (const n of readdirSync(BUNDLES)) { const d = join(BUNDLES, n); if (existsSync(join(d, 'manifest.json'))) refs.push({ id: n.replace(/^run-/, ''), dir: d, source: 'local' }); }
-    const walk = (d: string) => { if (!existsSync(d)) return; for (const e of readdirSync(d)) { const p = join(d, e); if (!statSync(p).isDirectory()) continue; if (existsSync(join(p, 'manifest.json'))) { if (!refs.some(r => r.id === e)) refs.push({ id: e, dir: p, source: 'results-repo' }); } else walk(p); } };
+    const walk = (d: string) => { if (!existsSync(d)) return; for (const e of readdirSync(d)) { const p = join(d, e); if (!statSync(p).isDirectory()) continue; if (existsSync(join(p, 'manifest.json'))) { const id = e.replace(/^run-/, ''); if (!refs.some(r => r.id === id)) refs.push({ id, dir: p, source: 'results-repo' }); } else walk(p); } };
     walk(join(RUNS_DIR, 'runs'));
     return refs;
 }
@@ -112,10 +146,11 @@ function runSummary(r: RunRef) {
 function runDetail(r: RunRef) {
     const agentDir = join(r.dir, 'agent');
     let agentLog = '';
-    if (existsSync(agentDir)) for (const f of readdirSync(agentDir)) if (/opencode.*\.txt$|\.jsonl?$/.test(f)) agentLog += readText(join(agentDir, f)) + '\n';
+    // The OpenCode stream only: trajectory.json is a pretty-printed summary that parsed as ~1,400 junk notes.
+    if (existsSync(agentDir)) for (const f of readdirSync(agentDir)) if (/^opencode.*\.txt$|\.jsonl$/.test(f)) agentLog += readText(join(agentDir, f)) + '\n';
     const partner = parseJsonl(readText(join(r.dir, 'partners', 'partner01.jsonl')));
     return { ...runSummary(r), manifest: readJson(join(r.dir, 'manifest.json')), verdict: readJson(join(r.dir, 'verdict.json')),
-        steps: parseTrajectory(agentLog), events: parseJsonl(readText(join(r.dir, 'events.jsonl'))), partner, progress: partnerProgress(partner),
+        steps: parseTrajectory(agentLog, parseJsonl(readText(join(r.dir, 'agent-reasoning.jsonl')))), events: parseJsonl(readText(join(r.dir, 'events.jsonl'))), partner, progress: partnerProgress(partner),
         reports: parseJsonl(readText(join(r.dir, 'reports.jsonl'))), warnings: readText(join(r.dir, 'WARNINGS.txt')).trim() || null };
 }
 
@@ -145,14 +180,28 @@ async function startLaunch(body: { variant?: string; all?: boolean; trials?: num
     return { ok: true };
 }
 
+async function stopLaunch() {
+    const proc = launch.proc;
+    if (!proc || proc.exitCode !== null) return;
+    // Harbor is a direct child of run-pilot.sh. SIGINT lets it tear down its containers.
+    const children = await run(['ps', '-axo', 'pid=,ppid=,args=']);
+    if (!children.ok || launch.proc !== proc || proc.exitCode !== null) return;
+    for (const line of children.out.split('\n')) {
+        const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/);
+        if (m && Number(m[2]) === proc.pid && /^(?:\S*\/)?(?:python[\d.]*\s+)?(?:\S*\/)?harbor\s+run(?:\s|$)/.test(m[3]!)) {
+            try { process.kill(Number(m[1]), 'SIGINT'); } catch { /* Child already exited. */ }
+        }
+    }
+}
+
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
 export function handle(req: Request): Response | Promise<Response> {
     const url = new URL(req.url);
     const p = url.pathname;
     if (p === '/' || p === '/index.html') return new Response(Bun.file(join(import.meta.dir, 'index.html')));
-    if (p === '/api/live') return json(liveSnapshot());
-    if (p === '/api/live/screen.png') { const png = screenshot(); return png ? new Response(png, { headers: { 'content-type': 'image/png', 'cache-control': 'no-store' } }) : new Response('no screen', { status: 404 }); }
+    if (p === '/api/live') return liveSnapshot().then(s => json(s));
+    if (p === '/api/live/screen.jpg') return screenshot().then(img => img ? new Response(img, { headers: { 'content-type': 'image/jpeg', 'cache-control': 'no-store' } }) : new Response('no screen', { status: 404 }));
     if (p === '/api/runs') return json(runRefs().map(runSummary).sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))));
     const m = p.match(/^\/api\/runs\/([\w.-]+)(\/video\.mp4)?$/);
     if (m) {
@@ -164,7 +213,9 @@ export function handle(req: Request): Response | Promise<Response> {
     if (p === '/api/preflight') return json(preflight());
     if (p === '/api/launch' && req.method === 'POST') return req.json().catch(() => ({})).then(b => startLaunch(b as any)).then(r => json(r, r.ok ? 200 : 409));
     if (p === '/api/launch') return json({ running: !!launch.proc && launch.proc.exitCode === null, exitCode: launch.proc?.exitCode ?? null, startedAt: launch.startedAt, args: launch.args, log: launch.log.slice(-20_000) });
-    if (p === '/api/launch/stop' && req.method === 'POST') { launch.proc?.kill(); return json({ ok: true }); }
+    if (p === '/api/launch/stop' && req.method === 'POST') {
+        return stopLaunch().then(() => json({ ok: true }));
+    }
     return new Response('not found', { status: 404 });
 }
 

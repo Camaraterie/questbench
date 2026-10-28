@@ -30,7 +30,8 @@ QB_STUDIO_MOCK=<dir> bun run studio        # Studio against a fake container dir
 
 ## Inspecting a run without a human relaying logs
 - Studio's JSON API is the easiest interface: `GET /api/live` (current trial: steps, events, partner progress, warnings), `GET /api/runs`, `GET /api/runs/<id>`, `GET /api/preflight`, `POST /api/launch {variant, trials, all, publish}`.
-- Inside a running container: agent log `/logs/agent/opencode*.txt`, server events `/logs/tracking/events.jsonl`, partner `/logs/partners/partner01.{jsonl,log,lite.log}`, agent reports `/var/qb/reports/reports.jsonl`.
+- Inside a running container: agent log `/logs/agent/opencode*.txt`, server events `/logs/tracking/events.jsonl`, partner `/logs/partners/partner01.{jsonl,log,lite.log}`, agent reports `/var/qb/reports/reports.jsonl`, agent reasoning text (not in the OpenCode log) `bun /qb/dump-reasoning.ts` (reads `/home/agent/.local/share/opencode/opencode.db`).
+- Finished bundles carry the reasoning as `agent-reasoning.jsonl`; Studio merges it into the timeline.
 - Finished runs: `bundles/run-<id>/` locally, and (when published) `Camaraterie/questbench-runs` under `runs/<date>/<task>/<id>/` with `runs/index.json`.
 
 ## Rules

@@ -9,3 +9,4 @@ vendor/
 .DS_Store
 .env.local
 results/
+__pycache__/
