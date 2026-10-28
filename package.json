@@ -11,7 +11,8 @@
     "generate": "bun generate-tasks.ts",
     "verify-bundle": "bun ingest/verify-bundle.ts",
     "redact": "bun tools/redact-bundle.ts",
-    "page": "python3 tools/build-page.py"
+    "page": "python3 tools/build-page.py",
+    "studio": "bun studio/server.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QuestBench Studio</title>
+<link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Noto+Sans+Mono" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<style>
+/* Design tokens (RuneBench project-page register). Retheme here. */
+:root{ --font-body:'Noto Sans',sans-serif; --font-display:'Google Sans','Noto Sans',sans-serif; --font-mono:'Noto Sans Mono',ui-monospace,monospace;
+  --link:hsl(204,86%,53%); --ink:#363636; --muted:#7a7a7a; --panel:#f5f5f5; --line:#e8e8e8;
+  --ok:#3c9a5f; --bad:#cc3f3f; --warn:#b7791f; --thought:#2a6fb0; --pm:#7b4fb3; --code-bg:#fafafa; }
+body{font-family:var(--font-body);color:var(--ink);background:#fff}
+.title,.subtitle,.tabs,.studio-h{font-family:var(--font-display)}
+.hero-body{padding:1.6rem 1.5rem .4rem}
+.tabs a{font-weight:500}
+.section{padding:1rem 1.5rem 2rem}
+.panel-box{border:1px solid var(--line);border-radius:10px;background:#fff;display:flex;flex-direction:column;min-height:0}
+.panel-box>header{padding:.6rem .9rem;border-bottom:1px solid var(--line);font-family:var(--font-display);font-weight:500;display:flex;justify-content:space-between;align-items:center;gap:.5rem}
+.panel-box>.body{padding:.7rem .9rem;overflow:auto}
+.grid3{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr) minmax(0,1fr);gap:1rem;height:calc(100vh - 230px);min-height:520px}
+.grid3 .panel-box .body{flex:1}
+@media(max-width:1100px){.grid3{grid-template-columns:1fr;height:auto}.grid3 .panel-box .body{max-height:60vh}}
+.step{padding:.45rem 0;border-bottom:1px dashed var(--line);font-size:.88rem}
+.step:last-child{border-bottom:0}
+.t{color:var(--muted);font-family:var(--font-mono);font-size:.75rem;margin-right:.4rem}
+.thought{color:var(--thought)}
+.tool-name{font-weight:600}
+pre.code,pre.out{font-family:var(--font-mono);font-size:.75rem;white-space:pre-wrap;word-break:break-word;background:var(--code-bg);border:1px solid var(--line);border-radius:6px;padding:.4rem .55rem;margin:.3rem 0 0;max-height:220px;overflow:auto}
+pre.out{background:#f6fbf7}
+pre.err{background:#fdf3f3;color:var(--bad);border-color:#f2d6d6}
+details summary{cursor:pointer;color:var(--muted);font-size:.78rem}
+.pm{color:var(--pm);font-size:.82rem;margin-top:.25rem}
+.cost{color:var(--muted);font-size:.72rem;font-family:var(--font-mono)}
+.screen{width:100%;aspect-ratio:4/3;background:#111;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#aaa;overflow:hidden}
+.screen img,.screen video{width:100%;height:100%;object-fit:contain}
+.clock{font-family:var(--font-display);font-size:1.6rem}
+.track{display:flex;gap:.3rem;flex-wrap:wrap;margin:.6rem 0}
+.track span{font-size:.74rem;padding:.25rem .55rem;border-radius:999px;background:var(--panel);color:var(--muted)}
+.track span.on{background:#e7f4ec;color:var(--ok);font-weight:600}
+.track span.bad{background:#fbeaea;color:var(--bad);font-weight:600}
+.ev{font-size:.84rem;padding:.35rem 0;border-bottom:1px dashed var(--line)}
+.ev .who{font-weight:600}
+.ev.trade{background:#f1f8f3;border-radius:6px;padding:.4rem .5rem}
+.ev.varp,.ev.wealth{color:var(--muted)}
+.notice{font-size:.85rem}
+.tag.is-model{font-family:var(--font-mono)}
+table.runs td,table.runs th{font-size:.85rem;vertical-align:middle}
+table.runs tr{cursor:pointer}
+.empty{color:var(--muted);text-align:center;padding:2rem 1rem}
+#launchlog{font-family:var(--font-mono);font-size:.75rem;white-space:pre-wrap;background:#111;color:#ddd;border-radius:8px;padding:.7rem;height:340px;overflow:auto}
+.check i{width:1.2rem}
+.demo-banner{background:#fff8e6;border-bottom:1px solid #f3e3b5;font-size:.82rem;text-align:center;padding:.35rem}
+</style>
+</head>
+<body>
+<div id="demo-banner" class="demo-banner is-hidden">Static preview with sample data. Run <code>bun studio</code> in the repo for the live version.</div>
+<section class="hero"><div class="hero-body"><div class="container is-fluid has-text-centered">
+  <h1 class="title is-2">QuestBench Studio</h1>
+  <p class="subtitle is-6 has-text-grey" style="margin-top:-.4rem">Watch agents coordinate, without touching the experiment</p>
+</div></div></section>
+<div class="container is-fluid">
+  <div class="tabs is-centered"><ul>
+    <li data-tab="live" class="is-active"><a><span class="icon is-small"><i class="fas fa-circle-play"></i></span><span>Live</span></a></li>
+    <li data-tab="runs"><a><span class="icon is-small"><i class="fas fa-list"></i></span><span>Runs</span></a></li>
+    <li data-tab="launch"><a><span class="icon is-small"><i class="fas fa-rocket"></i></span><span>Launch</span></a></li>
+  </ul></div>
+</div>
+
+<section class="section" id="tab-live">
+  <div id="live-empty" class="empty is-hidden"><p class="title is-5">No trial is running</p><p>Start one from the <a data-goto="launch">Launch</a> tab, or open a finished run under <a data-goto="runs">Runs</a>.</p></div>
+  <div id="live-header" class="level is-hidden" style="margin-bottom:.8rem">
+    <div class="level-left"><div class="level-item"><span class="tag is-dark" id="live-task"></span></div><div class="level-item"><span class="tag is-light" id="live-aids"></span></div></div>
+    <div class="level-right"><div class="level-item"><span class="clock" id="live-clock">--:--</span></div></div>
+  </div>
+  <div class="grid3 is-hidden" id="live-grid">
+    <div class="panel-box"><header><span>Agent timeline</span><span class="cost" id="live-cost"></span></header><div class="body" id="live-steps"></div></div>
+    <div class="panel-box"><header><span>Game view</span><span class="has-text-grey is-size-7">refreshes every second</span></header><div class="body">
+      <div class="screen" id="live-screen"><span>waiting for screen…</span></div>
+      <div class="studio-h" style="margin-top:.8rem;font-weight:500">Partner progress</div>
+      <div class="track" id="live-track"></div>
+      <div id="live-alerts"></div>
+    </div></div>
+    <div class="panel-box"><header><span>What the server recorded</span><span class="has-text-grey is-size-7">chat · PMs · trades</span></header><div class="body" id="live-events"></div></div>
+  </div>
+</section>
+
+<section class="section is-hidden" id="tab-runs">
+  <div class="columns">
+    <div class="column is-4"><div class="panel-box"><header><span>Finished runs</span><span class="is-size-7 has-text-grey" id="runs-count"></span></header><div class="body" style="padding:0">
+      <table class="table is-fullwidth is-hoverable runs"><thead><tr><th>Task</th><th>Model</th><th>Result</th></tr></thead><tbody id="runs-body"></tbody></table>
+      <div id="runs-empty" class="empty is-hidden">No runs yet. Finished runs appear here automatically.</div>
+    </div></div></div>
+    <div class="column is-8" id="run-detail"><div class="empty">Select a run</div></div>
+  </div>
+</section>
+
+<section class="section is-hidden" id="tab-launch">
+  <div class="columns">
+    <div class="column is-5">
+      <div class="panel-box"><header><span>Setup check</span><button class="button is-small is-light" id="pf-refresh">Recheck</button></header><div class="body" id="preflight"></div></div>
+      <div class="panel-box" style="margin-top:1rem"><header><span>Start a run</span></header><div class="body">
+        <div class="field"><label class="label is-small">Scenario</label><div class="select is-small is-fullwidth"><select disabled><option>A0 Rendezvous</option></select></div></div>
+        <div class="field"><label class="label is-small">Partner behaviour</label><div class="select is-small is-fullwidth"><select id="l-variant">
+          <option value="punctual">punctual: replies fast, waits 10 min</option><option value="late">late: arrives 3 min late</option><option value="drifter">drifter: slow replies, leaves after 90 s</option>
+          <option value="vague-only">vague-only: needs a place and a time</option><option value="goal-mismatch">goal-mismatch: wants logs, not coins</option></select></div></div>
+        <div class="field"><label class="label is-small">Tools</label><div class="select is-small is-fullwidth"><select id="l-cond"><option value="bare">bare rs-sdk</option><option value="aided">with coordination aids</option></select></div></div>
+        <div class="field is-grouped"><div class="control"><label class="label is-small">Trials</label><input class="input is-small" id="l-trials" type="number" min="1" max="10" value="1" style="width:5rem"></div>
+          <div class="control" style="padding-top:1.7rem"><label class="checkbox is-size-7"><input type="checkbox" id="l-all"> all 10 A0 tasks</label></div>
+          <div class="control" style="padding-top:1.7rem"><label class="checkbox is-size-7"><input type="checkbox" id="l-publish" checked> publish results</label></div></div>
+        <p class="is-size-7 has-text-grey" style="margin-bottom:.6rem">Model: GLM-5.3 (z.ai). One trial takes about 17 minutes.</p>
+        <div class="buttons"><button class="button is-dark is-rounded" id="l-go"><span class="icon"><i class="fas fa-play"></i></span><span>Run</span></button><button class="button is-rounded is-light" id="l-stop">Stop</button></div>
+      </div></div>
+    </div>
+    <div class="column is-7"><div class="panel-box"><header><span>Run output</span><span class="is-size-7 has-text-grey" id="l-status"></span></header><div class="body"><div id="launchlog">Nothing launched yet.</div></div></div></div>
+  </div>
+</section>
+
+<script>
+const DEMO = window.QB_DEMO || null;
+if (DEMO) document.getElementById('demo-banner').classList.remove('is-hidden');
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const mmss = (s) => s == null ? '' : `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+async function api(path, opts) {
+  if (DEMO) { if (path === '/api/live') return DEMO.live; if (path === '/api/runs') return DEMO.runs; if (path.startsWith('/api/runs/')) return DEMO.detail; if (path === '/api/preflight') return DEMO.preflight; if (path === '/api/launch') return {running:false,log:'(launching is disabled in the static preview)'}; return {}; }
+  const r = await fetch(path, opts); return r.json();
+}
+
+// ── tabs ──
+let tab = 'live';
+function show(t) { tab = t; document.querySelectorAll('.tabs li').forEach(li => li.classList.toggle('is-active', li.dataset.tab === t)); ['live','runs','launch'].forEach(x => $('tab-' + x).classList.toggle('is-hidden', x !== t)); if (t === 'runs') loadRuns(); if (t === 'launch') { loadPreflight(); pollLaunch(); } }
+document.querySelectorAll('.tabs li').forEach(li => li.onclick = () => show(li.dataset.tab));
+document.querySelectorAll('[data-goto]').forEach(a => a.onclick = () => show(a.dataset.goto));
+
+// ── renderers shared by live and replay ──
+function renderSteps(steps) {
+  if (!steps.length) return '<div class="empty">No agent activity yet.</div>';
+  return steps.map(s => {
+    const t = `<span class="t">${mmss(s.t)}</span>`;
+    if (s.kind === 'thought') return `<div class="step">${t}<span class="thought"><i class="fas fa-comment-dots"></i> ${esc(s.text)}</span></div>`;
+    if (s.kind === 'note') return `<div class="step"><span class="cost">${esc(s.text)}</span></div>`;
+    if (s.kind === 'cost') return `<div class="cost" style="padding:.1rem 0 .3rem">↳ in ${s.tokensIn} · out ${s.tokensOut} · reasoning ${s.reasoning} · $${s.cost.toFixed(4)} (total $${s.total.toFixed(3)})</div>`;
+    const icon = s.status === 'error' ? '<i class="fas fa-circle-xmark has-text-danger"></i>' : s.status === 'running' ? '<i class="fas fa-spinner fa-spin"></i>' : '<i class="fas fa-circle-check has-text-success"></i>';
+    const chat = (s.chat || []).map(c => `<div class="pm"><i class="fas fa-envelope"></i> ${esc(c)}</div>`).join('');
+    const out = s.status === 'error' ? `<pre class="out err">${esc(s.error || 'error')}</pre>` : s.output ? `<details><summary>result</summary><pre class="out">${esc(s.output)}</pre></details>` : '';
+    return `<div class="step">${t}${icon} <span class="tool-name">${esc(s.name)}</span>${s.secs != null ? ` <span class="cost">${s.secs.toFixed(1)}s</span>` : ''}<pre class="code">${esc(s.code)}</pre>${chat}${out}</div>`;
+  }).join('');
+}
+function renderEvents(events) {
+  const shown = events.filter(e => e.kind !== 'wealth' || true);
+  if (!shown.length) return '<div class="empty">Nothing recorded yet.</div>';
+  return shown.map(e => {
+    const d = e.data || {}, a = e.actors || [];
+    if (e.kind === 'chat_private') return `<div class="ev"><span class="t">tick ${e.tick}</span><span class="who">${esc(a[0])}</span> → <span class="who">${esc(a[1])}</span> <span class="tag is-light is-small">PM</span><div>${esc(d.text)}</div></div>`;
+    if (e.kind === 'chat_public') return `<div class="ev"><span class="t">tick ${e.tick}</span><span class="who">${esc(a[0])}</span> <span class="tag is-light is-small">says</span><div>${esc(d.shown ?? d.text)}</div></div>`;
+    if (e.kind === 'trade') { const items = (xs) => (xs||[]).map(i => `${i.count}× ${esc(i.name ?? i.id)}`).join(', ') || 'nothing'; return `<div class="ev trade"><span class="t">tick ${e.tick}</span><i class="fas fa-handshake"></i> <b>Trade</b>: ${esc(a[0])} gave ${items(d.fromItems)}; ${esc(a[1])} gave ${items(d.toItems)}</div>`; }
+    if (e.kind === 'varp') return `<div class="ev varp"><span class="t">tick ${e.tick}</span>${esc(a[0])}: ${esc(d.name)} ${d.from} → ${d.to}</div>`;
+    if (e.kind === 'wealth') return `<div class="ev wealth"><span class="t">tick ${e.tick}</span>${esc(a[0])}: item event (${(d.items||[]).map(i => `${i.count}× ${esc(i.name)}`).join(', ')})</div>`;
+    return `<div class="ev"><span class="t">tick ${e.tick}</span>${esc(e.kind)}</div>`;
+  }).join('');
+}
+const LABELS = { start: 'online', heard: 'heard agent', reply: 'replied', committed: 'agreed to meet', arrived: 'arrived', trade_result: 'traded' };
+function renderTrack(progress) {
+  const base = Object.keys(LABELS).map(k => { const on = progress.reached.includes(k); const bad = k === 'trade_result' && progress.traded === false; return `<span class="${bad ? 'bad' : on ? 'on' : ''}">${LABELS[k]}${bad ? ' ✗' : ''}</span>`; }).join('');
+  return base + (progress.drifted ? '<span class="bad">gave up waiting</span>' : '');
+}
+function stepCost(steps) { const c = [...steps].reverse().find(s => s.kind === 'cost'); return c ? `$${c.total.toFixed(3)}` : ''; }
+
+// ── live ──
+let lastStepCount = -1;
+async function pollLive() {
+  if (tab !== 'live') return;
+  let s; try { s = await api('/api/live'); } catch { return; }
+  const live = !!s.live;
+  $('live-empty').classList.toggle('is-hidden', live); $('live-grid').classList.toggle('is-hidden', !live); $('live-header').classList.toggle('is-hidden', !live);
+  if (!live) return;
+  $('live-task').textContent = s.task; $('live-aids').textContent = s.aids ? 'coordination aids' : 'bare tools';
+  if (s.startedAt) { const left = s.durationSecs - Math.round((Date.now() - Date.parse(s.startedAt)) / 1000); $('live-clock').textContent = left > 0 ? `${mmss(left)} left` : 'scoring…'; }
+  const box = $('live-steps'); const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+  if (s.steps.length !== lastStepCount) { box.innerHTML = renderSteps(s.steps); if (atBottom || lastStepCount < 0) box.scrollTop = box.scrollHeight; lastStepCount = s.steps.length; }
+  $('live-cost').textContent = stepCost(s.steps);
+  $('live-events').innerHTML = renderEvents(s.events);
+  $('live-track').innerHTML = renderTrack(s.progress);
+  const alerts = [];
+  if (s.partnerError) alerts.push(`<div class="notification is-danger is-light notice"><b>Partner bot failed to log in.</b> This trial can't measure cooperation.<pre class="out err">${esc(s.partnerError)}</pre></div>`);
+  else if (!s.partnerLoggedIn) alerts.push('<div class="notification is-warning is-light notice">Waiting for the partner bot to log in…</div>');
+  if (s.warnings) alerts.push(`<div class="notification is-warning is-light notice">${esc(s.warnings)}</div>`);
+  if ((s.reports||[]).length) alerts.push(`<div class="notification is-info is-light notice"><b>Agent reports</b><br>${s.reports.map(r => '• ' + esc(r.text)).join('<br>')}</div>`);
+  $('live-alerts').innerHTML = alerts.join('');
+  if (!DEMO) { const img = new Image(); img.onload = () => { const sc = $('live-screen'); sc.innerHTML = ''; sc.appendChild(img); }; img.src = '/api/live/screen.png?' + Date.now(); }
+  else if (DEMO.screen) $('live-screen').innerHTML = `<img src="${DEMO.screen}">`;
+}
+
+// ── runs ──
+async function loadRuns() {
+  const runs = await api('/api/runs');
+  $('runs-count').textContent = `${runs.length} run${runs.length === 1 ? '' : 's'}`;
+  $('runs-empty').classList.toggle('is-hidden', runs.length > 0);
+  $('runs-body').innerHTML = runs.map(r => `<tr data-id="${esc(r.id)}"><td>${esc((r.slug||'').replace(/^a0-rendezvous-/, 'A0 · '))}<br><span class="is-size-7 has-text-grey">${esc((r.startedAt||'').replace('T',' ').slice(0,16))}</span></td><td><span class="tag is-light is-model">${esc((r.model||'').split('/').pop())}</span></td><td>${r.success === true ? '<span class="tag is-success is-light">traded</span>' : r.success === false ? '<span class="tag is-danger is-light">no trade</span>' : '<span class="tag">–</span>'}</td></tr>`).join('');
+  document.querySelectorAll('#runs-body tr').forEach(tr => tr.onclick = () => openRun(tr.dataset.id));
+}
+async function openRun(id) {
+  const r = await api('/api/runs/' + encodeURIComponent(id));
+  const m = r.manifest || {}, v = r.verdict || {};
+  $('run-detail').innerHTML = `
+    <div class="level"><div class="level-left"><div><p class="title is-5">${esc(r.slug)}</p><p class="is-size-7 has-text-grey">${esc(r.model)} · ${esc(r.harness)} · ${esc(r.startedAt)} · by ${esc(r.contributor)}</p></div></div>
+    <div class="level-right">${r.success === true ? '<span class="tag is-success is-medium">Trade completed</span>' : r.success === false ? '<span class="tag is-danger is-light is-medium">No trade</span>' : ''}</div></div>
+    ${r.warnings ? `<div class="notification is-warning is-light notice">${esc(r.warnings)}</div>` : ''}
+    <div class="columns"><div class="column is-6"><div class="panel-box"><header><span>Game video</span></header><div class="body">${r.hasVideo && !DEMO ? `<div class="screen"><video controls src="/api/runs/${encodeURIComponent(id)}/video.mp4"></video></div>` : '<div class="screen"><span>no video in this run</span></div>'}
+      <div class="studio-h" style="margin-top:.8rem;font-weight:500">Partner progress</div><div class="track">${renderTrack(r.progress)}</div>
+      ${(r.reports||[]).length ? `<div class="notification is-info is-light notice"><b>Agent reports</b><br>${r.reports.map(x => '• ' + esc(x.text)).join('<br>')}</div>` : ''}</div></div></div>
+      <div class="column is-6"><div class="panel-box" style="max-height:480px"><header><span>What the server recorded</span></header><div class="body">${renderEvents(r.events)}</div></div></div></div>
+    <div class="panel-box"><header><span>Agent timeline</span><span class="cost">${stepCost(r.steps)}</span></header><div class="body" style="max-height:70vh">${renderSteps(r.steps)}</div></div>`;
+}
+
+// ── launch ──
+async function loadPreflight() {
+  const checks = await api('/api/preflight');
+  $('preflight').innerHTML = checks.map(c => `<div class="check is-size-7" style="padding:.2rem 0">${c.ok ? '<i class="fas fa-check has-text-success"></i>' : '<i class="fas fa-xmark has-text-danger"></i>'} ${esc(c.name)}${c.ok ? '' : `<div class="has-text-grey" style="margin-left:1.3rem">${esc(c.fix)}</div>`}</div>`).join('');
+}
+$('pf-refresh').onclick = loadPreflight;
+$('l-go').onclick = async () => {
+  if (DEMO) return;
+  const body = { variant: `${$('l-variant').value}-${$('l-cond').value}`, all: $('l-all').checked, trials: Number($('l-trials').value), publish: $('l-publish').checked };
+  const r = await api('/api/launch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) alert(r.error || 'could not start'); pollLaunch();
+};
+$('l-stop').onclick = async () => { if (!DEMO) await api('/api/launch/stop', { method: 'POST' }); pollLaunch(); };
+async function pollLaunch() {
+  const s = await api('/api/launch');
+  const box = $('launchlog'); box.textContent = s.log || 'Nothing launched yet.'; box.scrollTop = box.scrollHeight;
+  $('l-status').textContent = s.running ? 'running…' : s.exitCode != null ? `finished (exit ${s.exitCode})` : '';
+}
+
+setInterval(() => { if (tab === 'live') pollLive(); if (tab === 'launch') pollLaunch(); }, 2000);
+pollLive();
+</script>
+</body>
+</html>
