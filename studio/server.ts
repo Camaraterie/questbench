@@ -40,9 +40,9 @@ function sh(cmd: string[], opts: { cwd?: string } = {}): { ok: boolean; out: str
 // ── Live container access ──
 // Every poll used to make ~10 blocking `docker exec` calls (~2.5 s on WSL, stalling the whole server).
 // Now: one async exec for all files plus one for reasoning, cached briefly and shared by every tab.
-async function run(cmd: string[], stdin?: string): Promise<{ ok: boolean; out: string; bytes: Uint8Array }> {
+async function run(cmd: string[], stdin?: string, timeout = 10_000): Promise<{ ok: boolean; out: string; bytes: Uint8Array }> {
     try {
-        const p = Bun.spawn(cmd, { stdin: stdin === undefined ? 'ignore' : new TextEncoder().encode(stdin), stdout: 'pipe', stderr: 'ignore' });
+        const p = Bun.spawn(cmd, { stdin: stdin === undefined ? 'ignore' : new TextEncoder().encode(stdin), stdout: 'pipe', stderr: 'ignore', timeout, killSignal: 'SIGKILL' });
         const bytes = new Uint8Array(await new Response(p.stdout).arrayBuffer());
         return { ok: (await p.exited) === 0, out: new TextDecoder().decode(bytes), bytes };
     } catch { return { ok: false, out: '', bytes: new Uint8Array() }; }
@@ -101,23 +101,28 @@ async function buildSnapshot() {
         warnings: (f.warnings ?? '').trim() || null,
     };
 }
-let liveCache: { at: number; p: Promise<any> } = { at: 0, p: Promise.resolve(null) };
+function cached<T>(build: () => Promise<T>): () => Promise<T> {
+    let p: Promise<T> | undefined, settledAt = 0, pending = false;
+    return () => {
+        if (!p || (!pending && Date.now() - settledAt > 1500)) {
+            pending = true;
+            p = build().finally(() => { pending = false; settledAt = Date.now(); });
+        }
+        return p;
+    };
+}
+const snapshot = cached(buildSnapshot);
 export function liveSnapshot(): Promise<any> {
-    if (Date.now() - liveCache.at > 1500) liveCache = { at: Date.now(), p: buildSnapshot() };
-    return liveCache.p;
+    return snapshot();
 }
 
 // One JPEG grab of the virtual display at a time; concurrent requests share it.
-let shotCache: { at: number; p: Promise<Uint8Array | null> } = { at: 0, p: Promise.resolve(null) };
-function screenshot(): Promise<Uint8Array | null> {
-    if (Date.now() - shotCache.at > 1500) shotCache = { at: Date.now(), p: (async () => {
-        const c = await findContainer();
-        if (!c || MOCK) return null;
-        const r = await run(['docker', 'exec', c, 'ffmpeg', '-loglevel', 'error', '-f', 'x11grab', '-video_size', '800x600', '-i', ':99', '-frames:v', '1', '-q:v', '4', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-']);
-        return r.ok && r.bytes.length > 100 ? r.bytes : null;
-    })() };
-    return shotCache.p;
-}
+const screenshot = cached(async (): Promise<Uint8Array | null> => {
+    const c = await findContainer();
+    if (!c || MOCK) return null;
+    const r = await run(['docker', 'exec', c, 'timeout', '-s', 'KILL', '8s', 'ffmpeg', '-loglevel', 'error', '-f', 'x11grab', '-video_size', '800x600', '-i', ':99', '-frames:v', '1', '-q:v', '4', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-']);
+    return r.ok && r.bytes.length > 100 ? r.bytes : null;
+});
 
 // ── Finished runs: local bundles + the results repo index ──
 interface RunRef { id: string; dir: string; source: 'local' | 'results-repo' }
@@ -175,6 +180,20 @@ async function startLaunch(body: { variant?: string; all?: boolean; trials?: num
     return { ok: true };
 }
 
+async function stopLaunch() {
+    const proc = launch.proc;
+    if (!proc || proc.exitCode !== null) return;
+    // Harbor is a direct child of run-pilot.sh. SIGINT lets it tear down its containers.
+    const children = await run(['ps', '-axo', 'pid=,ppid=,args=']);
+    if (!children.ok || launch.proc !== proc || proc.exitCode !== null) return;
+    for (const line of children.out.split('\n')) {
+        const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/);
+        if (m && Number(m[2]) === proc.pid && /^(?:\S*\/)?(?:python[\d.]*\s+)?(?:\S*\/)?harbor\s+run(?:\s|$)/.test(m[3]!)) {
+            try { process.kill(Number(m[1]), 'SIGINT'); } catch { /* Child already exited. */ }
+        }
+    }
+}
+
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
 export function handle(req: Request): Response | Promise<Response> {
@@ -195,9 +214,7 @@ export function handle(req: Request): Response | Promise<Response> {
     if (p === '/api/launch' && req.method === 'POST') return req.json().catch(() => ({})).then(b => startLaunch(b as any)).then(r => json(r, r.ok ? 200 : 409));
     if (p === '/api/launch') return json({ running: !!launch.proc && launch.proc.exitCode === null, exitCode: launch.proc?.exitCode ?? null, startedAt: launch.startedAt, args: launch.args, log: launch.log.slice(-20_000) });
     if (p === '/api/launch/stop' && req.method === 'POST') {
-        // Killing the wrapper script leaves `harbor run` and its container behind; SIGINT lets Harbor tear them down.
-        launch.proc?.kill(); sh(['pkill', '-INT', '-f', 'harbor run -p tasks/']);
-        return json({ ok: true });
+        return stopLaunch().then(() => json({ ok: true }));
     }
     return new Response('not found', { status: 404 });
 }
