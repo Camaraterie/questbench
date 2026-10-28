@@ -122,7 +122,7 @@ describe('studio live operations', () => {
             calls.push(cmd);
             const listing = cmd[1] === 'ps';
             const shot = cmd.includes('ffmpeg');
-            const text = listing ? 'a0-rendezvous-test\n' : shot ? 'x'.repeat(101) : '';
+            const text = listing ? 'a0-rendezvous-test__trial\n' : shot ? 'x'.repeat(101) : '';
             return { stdout: new ReadableStream({ start(c) {
                 const finish = () => { c.enqueue(new TextEncoder().encode(text)); c.close(); };
                 if (listing) finish(); else pending.push(finish);

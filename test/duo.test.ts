@@ -1,6 +1,16 @@
 import { expect, test } from 'bun:test';
 import { rewardMetrics, scoreDuo } from '../verifiers/check_duo';
 import { seatConfig, seatPrompt } from '../docker/seats/launch';
+import { resolveTasks } from '../src/scenarios';
+
+test('both duo variants start adjacent in Lumbridge and tell each seat the partner is nearby', () => {
+    for (const task of resolveTasks().filter(t => t.scenario.id === 'a0-duo')) {
+        const [buyer, seller] = task.roles;
+        expect(buyer.save.position).toEqual({ x: 3222, z: 3218 });
+        expect(seller.save.position).toEqual({ x: 3223, z: 3218 });
+        for (const role of task.roles) expect(role.brief).toContain('starts beside you in the Lumbridge spawn courtyard');
+    }
+});
 
 const seat = (username: string, fairTradeCompleted: boolean, unchanged = false, netValue = 0) =>
     ({ username, fairTradeCompleted, unchanged, netValue, delta: {}, expect: { gain: [] }, reward: 0 });

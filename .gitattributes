@@ -1,0 +1,2 @@
+# Container and WSL entrypoints must retain POSIX line endings on Windows checkouts.
+*.sh text eol=lf

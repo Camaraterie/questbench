@@ -15,7 +15,7 @@ const SRC = join(root, 'server/engine/src');
 const MARK = '// QB-EVENTLOG';
 const IMPORT = "import { logEvent } from '#/engine/entity/tracking/EventLog.js';";
 
-interface Edit { anchor: string | RegExp; insert: string; where: 'before' | 'after' }
+interface Edit { anchor: string | RegExp; insert: string; where: 'before' | 'after' | 'replace' }
 interface FilePatch { file: string; imports: string[]; edits: Edit[] }
 
 const PATCHES: FilePatch[] = [
@@ -59,8 +59,8 @@ const PATCHES: FilePatch[] = [
         imports: [IMPORT, "import { fromBase37 } from '#/util/JString.js';"],
         edits: [{
             anchor: /(\n(\s*)World\.sendPrivateMessage\(player, username, WordPack\.unpack\(buf, input\.length\)\);)/,
-            where: 'before',
-            insert: "\n$2logEvent(World.currentTick, 'chat_private', [player.username, fromBase37(username)], { text: WordPack.unpack(buf, input.length) }); " + MARK,
+            where: 'replace',
+            insert: "\n$2const privateText = WordPack.unpack(buf, input.length);\n$2logEvent(World.currentTick, 'chat_private', [player.username, fromBase37(username)], { text: privateText }); " + MARK + "\n$2World.sendPrivateMessage(player, username, privateText);",
         }],
     },
 ];
@@ -72,6 +72,11 @@ const VARP_TO = (ind: string) => `} else if (typeof value === 'number') {\n${ind
 function count(text: string, re: RegExp) { return (text.match(new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')) ?? []).length; }
 
 export function patchText(file: string, text: string): string {
+    // Upgrade the original hook too: unpack() consumes buf, so logging it inline made delivery
+    // decode pooled bytes after the message. Remove only that exact legacy hook before patching.
+    if (file === 'network/game/client/handler/MessagePrivateHandler.ts') {
+        text = text.replace(/^.*logEvent\(World\.currentTick, 'chat_private', \[player\.username, fromBase37\(username\)\], \{ text: WordPack\.unpack\(buf, input\.length\) \}\); \/\/ QB-EVENTLOG\r?\n/gm, '');
+    }
     if (text.includes(MARK)) return text; // already patched
     const p = PATCHES.find(x => x.file === file)!;
     let out = text;
@@ -83,7 +88,7 @@ export function patchText(file: string, text: string): string {
         out = out.replace(re, (...m) => {
             const whole = m[1] as string, ind = m[2] as string;
             const ins = e.insert.replace(/\$2/g, ind);
-            return e.where === 'before' ? ins + whole : whole + ins;
+            return e.where === 'replace' ? ins : e.where === 'before' ? ins + whole : whole + ins;
         });
     }
     if (file === 'engine/entity/Player.ts') {
