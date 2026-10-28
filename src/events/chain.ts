@@ -18,7 +18,7 @@ export type EventKind =
     | 'varp'
     | 'wealth'      // drop / pickup / death / pvp / shop, from World.addWealthEvent
     | 'combat'
-    | 'login' | 'logout';
+    | 'login' | 'logout' | 'intervention';
 
 export interface GameEvent {
     seq: number;

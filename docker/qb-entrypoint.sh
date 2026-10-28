@@ -3,6 +3,8 @@
 # (aided condition only) the coordination-aid services. Everything here runs as root; the agent
 # runs as the unprivileged `agent` user and cannot signal, edit or read partner credentials.
 set -e
+mkdir -p /run/qb && chmod 700 /run/qb
+bun -e 'const fs=require("fs"); fs.writeFileSync("/run/qb/studio-token",crypto.randomUUID(),{mode:0o600});'
 /entrypoint.sh "$@" &
 BASE_PID=$!
 

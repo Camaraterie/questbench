@@ -90,7 +90,8 @@ export function bundleTrial(trialDir: string, jobDir: string, opts: BundleOption
         startedAt: existsSync(join(qb, 'qb_start.txt')) ? readFileSync(join(qb, 'qb_start.txt'), 'utf8').trim() : '',
         endedAt: existsSync(join(qb, 'qb_end.txt')) ? readFileSync(join(qb, 'qb_end.txt'), 'utf8').trim() : '',
         contributor: { handle: opts.handle, licence: opts.licence },
-        conditions: { aids: env.QB_AIDS === '1', durationSecs: Number(env.QB_DURATION_SECS ?? 0) },
+        conditions: { aids: env.QB_AIDS === '1', durationSecs: Number(env.QB_DURATION_SECS ?? 0), exploratory: env.QB_EXPLORATORY === '1',
+            intervened: existsSync(join(qb, 'interventions.jsonl')) && readFileSync(join(qb, 'interventions.jsonl'), 'utf8').trim().length > 0 },
         usage: result?.agent_result ? { inputTokens: result.agent_result.n_input_tokens ?? 0, outputTokens: result.agent_result.n_output_tokens ?? 0, cacheTokens: result.agent_result.n_cache_tokens ?? 0, costUsd: result.agent_result.cost_usd ?? null } : undefined,
         provenance: { imageDigestKnown: !!opts.imageDigest, taskDigestFromLocalTasksDir: existsSync(taskDir) },
         // Pair tier: who played each seat (docker/seats/launch.ts logs "starting seat <bot> as <user> (<model>)").
@@ -100,7 +101,7 @@ export function bundleTrial(trialDir: string, jobDir: string, opts: BundleOption
     writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
     if (existsSync(join(qb, 'events.jsonl'))) cpSync(join(qb, 'events.jsonl'), join(dir, 'events.jsonl')); else writeFileSync(join(dir, 'events.jsonl'), '');
     cpSync(join(qb, 'saves'), join(dir, 'saves'), { recursive: true });
-    for (const extra of ['partners', 'board.jsonl', 'trade_ledger.jsonl', 'WARNINGS.txt', 'reports.jsonl', 'agent-reasoning.jsonl', 'seats']) if (existsSync(join(qb, extra))) cpSync(join(qb, extra), join(dir, extra), { recursive: true });
+    for (const extra of ['partners', 'board.jsonl', 'trade_ledger.jsonl', 'WARNINGS.txt', 'reports.jsonl', 'agent-reasoning.jsonl', 'seats', 'interventions.jsonl', 'scenario.json']) if (existsSync(join(qb, extra))) cpSync(join(qb, extra), join(dir, extra), { recursive: true });
     if (existsSync(join(trialDir, 'verifier', 'reward.json'))) cpSync(join(trialDir, 'verifier', 'reward.json'), join(dir, 'verdict.json'));
     // Pair tier: the per-seat detail lives beside reward.json (Harbor only accepts numbers in it).
     if (existsSync(join(trialDir, 'verifier', 'duo.json'))) writeFileSync(join(dir, 'verdict.json'), readFileSync(join(trialDir, 'verifier', 'duo.json'), 'utf8'));

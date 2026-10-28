@@ -15,6 +15,7 @@ RUN bun /qb/engine/apply-patch.ts /app \
     && grep -q "QB-EVENTLOG" /app/server/engine/src/network/game/client/handler/MessagePrivateHandler.ts
 ENV EVENT_LOG_FILE=/logs/tracking/events.jsonl
 ENV QB_OBSERVER=1
+ENV QB_STUDIO_CONTROL=1
 # Private messages are relayed by the engine's friend server, which is off by default; without it
 # every PM is silently dropped (the sender still sees its own "To <name>" echo). EASY_STARTUP starts
 # the friend server as a worker before the world boots; FRIEND_SERVER makes the world use it.

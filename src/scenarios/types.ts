@@ -20,13 +20,15 @@ export interface Role {
     brief: string;
     /** Pair tier: what this seat should have gained/given up for its own trade to count. */
     expect?: TradeExpect;
+    sessionPolicy?: 'finish' | 'continue';
 }
 
 export interface Variant {
+    exploratory?: boolean;
     /** appended to the scenario id: <id>-<variant.slug>-<minutes>m */
     slug: string;
     /** which roles' policies change in this variant */
-    overrides: Record<string, Partial<Pick<Role, 'policy' | 'params' | 'brief' | 'expect'>>>;
+    overrides: Record<string, Partial<Pick<Role, 'policy' | 'params' | 'brief' | 'expect' | 'sessionPolicy'>>>;
     note: string;
 }
 

@@ -14,7 +14,7 @@ const POLLER = `let areas=[]; let buffer='';
 (async()=>{for await(const chunk of Bun.stdin.stream()){buffer+=new TextDecoder().decode(chunk);let i;while((i=buffer.indexOf('\\n'))>=0){try{areas=JSON.parse(buffer.slice(0,i)).slice(0,4)}catch{}buffer=buffer.slice(i+1)}}})();
 while(true){await Promise.all(areas.map(async a=>{try{const q=new URLSearchParams(a);const r=await fetch('http://localhost:8888/qb-observer?'+q,{signal:AbortSignal.timeout(2000)});if(!r.ok)throw Error('Observer endpoint '+r.status);console.log(JSON.stringify({key:JSON.stringify(a),data:await r.json()}))}catch(e){console.log(JSON.stringify({key:JSON.stringify(a),error:String(e)}))}}));await Bun.sleep(250)}`;
 
-export function observerRelay(findContainer: () => Promise<string | null>) {
+export function observerRelay(findContainer: () => Promise<string | null>, captions: () => Record<string, any> = () => ({})) {
     const viewers = new Set<ObserverSocket>();
     let proc: ReturnType<typeof Bun.spawn> | undefined, container: string | null = null, generation = 0, timer: ReturnType<typeof setInterval> | undefined;
     let error: string | null = null, lastFrameAt = 0, busy = false;
@@ -55,8 +55,10 @@ export function observerRelay(findContainer: () => Promise<string | null>) {
                             if (reset) { ws.send(JSON.stringify(snapshot.hello)); ws.data.previous = undefined; ws.data.generation = g; }
                             ws.send(JSON.stringify(snapshot.roster));
                             const previous = ws.data.previous;
+                            const annotations = captions();
+                            const names = new Map(snapshot.roster.p.map((p: any[]) => [p[0], String(p[1]).toLowerCase()]));
                             const frame = { ...snapshot.frame,
-                                p: snapshot.frame.p.map((e: any) => ({ ...e, qbSampleMs: 250 })),
+                                p: snapshot.frame.p.map((e: any) => ({ ...e, qbSampleMs: 250, qbOverlay: annotations[names.get(e.i) as string] ?? null })),
                                 n: snapshot.frame.n.map((e: any) => ({ ...e, qbSampleMs: 250 })),
                                 relayObservedAt: snapshot.at, relaySnapshot: false,
                                 ...(reset ? { reset: 1 } : {}),

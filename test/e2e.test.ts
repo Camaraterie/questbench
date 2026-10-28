@@ -19,6 +19,7 @@ import { parseIn, post, read } from '../aids/board';
 import { untilMessage } from '../aids/interrupt';
 import { resolveTasks } from '../src/scenarios';
 import { instruction, testSh } from '../generate-tasks';
+import { indexEntry } from '../tools/publish-run';
 
 async function engineLog(file: string, events: Array<[number, string, string[], Record<string, unknown>]>) {
     process.env.EVENT_LOG_FILE = file;
@@ -110,6 +111,25 @@ describe('task generation', () => {
 });
 
 describe('offline end-to-end pipeline', () => {
+    test.each(['exploratory', 'intervened'])('%s sessions retain provenance without entering baseline scores', async flag => {
+        const job = mkdtempSync(join(tmpdir(), 'qb-explore-'));
+        const slug = 'a0-rendezvous-punctual-bare-15m';
+        const { trial, qb } = fakeTrial(job, { slug, success: true, model: 'test/model', specific: true });
+        const out = join(job, 'bundles'), tasks = join(job, 'tasks');
+        mkdirSync(join(tasks, slug), { recursive: true }); writeFileSync(join(tasks, slug, 'task.toml'), 'fixture');
+        await engineLog(join(qb, 'events.jsonl'), [[1, 'login', ['agent'], {}]]);
+        if (flag === 'exploratory') writeFileSync(join(qb, 'env.txt'), readFileSync(join(qb, 'env.txt'), 'utf8') + 'QB_EXPLORATORY=1\n');
+        else writeFileSync(join(qb, 'interventions.jsonl'), JSON.stringify({ phase: 'applied', reason: 'test intervention' }) + '\n');
+        writeFileSync(join(qb, 'scenario.json'), JSON.stringify({ title: 'Private fixture configuration' }));
+        const result = bundleTrial(trial, job, { out, tasksDir: tasks, handle: 'test', licence: 'CC-BY-4.0' });
+        expect(result.ingest?.tier).toBe('submitted');
+        const manifest = JSON.parse(readFileSync(join(result.bundle!, 'manifest.json'), 'utf8'));
+        expect(manifest.conditions[flag]).toBe(true);
+        expect(existsSync(join(result.bundle!, 'scenario.json'))).toBe(true);
+        if (flag === 'intervened') expect(existsSync(join(result.bundle!, 'interventions.jsonl'))).toBe(true);
+        expect(aggregate(out)).toEqual({ rows: [], rejected: [] });
+        expect(indexEntry(result.bundle!, 'fixture')).toMatchObject({ exploratory: true, success: null, reward: null });
+    });
     test('screen recording is excluded unless explicitly opted in', () => {
         const job = mkdtempSync(join(tmpdir(), 'qbvideo-'));
         const { trial } = fakeTrial(job, { slug: 'a0-rendezvous-punctual-bare-15m', success: false, model: 'test', specific: false });

@@ -55,6 +55,6 @@ test('launch stops only labeled previews and serializes concurrent launch reques
         expect((await first).status).toBe(200);
         expect(calls[0]).toEqual(['docker', 'ps', '-q', '--filter', 'label=questbench.observer-preview=1']);
         expect(calls[1]).toEqual(['docker', 'stop', '-t', '2', 'abcdefabcdef']);
-        expect(calls[2][0]).toBe('bash');
+        expect(calls[2]![0]).toBe('bash');
     } finally { release(); spawn.mockRestore(); }
 });
