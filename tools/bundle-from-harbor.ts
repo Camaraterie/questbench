@@ -102,6 +102,8 @@ export function bundleTrial(trialDir: string, jobDir: string, opts: BundleOption
     cpSync(join(qb, 'saves'), join(dir, 'saves'), { recursive: true });
     for (const extra of ['partners', 'board.jsonl', 'trade_ledger.jsonl', 'WARNINGS.txt', 'reports.jsonl', 'agent-reasoning.jsonl', 'seats']) if (existsSync(join(qb, extra))) cpSync(join(qb, extra), join(dir, extra), { recursive: true });
     if (existsSync(join(trialDir, 'verifier', 'reward.json'))) cpSync(join(trialDir, 'verifier', 'reward.json'), join(dir, 'verdict.json'));
+    // Pair tier: the per-seat detail lives beside reward.json (Harbor only accepts numbers in it).
+    if (existsSync(join(trialDir, 'verifier', 'duo.json'))) writeFileSync(join(dir, 'verdict.json'), readFileSync(join(trialDir, 'verifier', 'duo.json'), 'utf8'));
     if (existsSync(join(trialDir, 'agent'))) cpSync(join(trialDir, 'agent'), join(dir, 'agent'), { recursive: true });
     // Screen recordings cannot be text-redacted. Opt in only after reviewing the video for secrets.
     if (opts.includeRecording && existsSync(join(trialDir, 'verifier', 'recording.mp4'))) cpSync(join(trialDir, 'verifier', 'recording.mp4'), join(dir, 'recording.mp4'));
