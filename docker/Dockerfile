@@ -28,6 +28,7 @@ COPY aids /qb/aids
 COPY docker/qb-entrypoint.sh /qb-entrypoint.sh
 COPY docker/collect-artifacts.sh /qb/collect-artifacts.sh
 COPY docker/check-run.ts /qb/check-run.ts
+COPY docker/dump-reasoning.ts /qb/dump-reasoning.ts
 
 # 3. Multi-agent scenarios need chat: RuneBench's agent bot.env ships SHOW_CHAT=false.
 #    TELEMETRY=false stops rs-sdk's bug-report tool posting to the public demo server from benchmark
@@ -36,6 +37,16 @@ ENV TELEMETRY=false
 RUN sed -i 's/^SHOW_CHAT=.*/SHOW_CHAT=true/' /app/bots/agent/bot.env \
     && grep -q '^SHOW_CHAT=true' /app/bots/agent/bot.env \
     && (grep -q '^TELEMETRY=' /app/bots/agent/bot.env || echo 'TELEMETRY=false' >> /app/bots/agent/bot.env)
+
+# 3b. Agent client and screen recording (RuneBench's launch-bot.ts and /entrypoint.sh).
+#    The agent's browser client gets 30 s to log in; on a loaded machine it misses that, and the
+#    watchdog then restarts the whole engine stack (10 times, then gives up), so the trial is lost.
+#    Allow 180 s. The recording was 400x300 with a keyframe every 250 s (blurry, hard to seek):
+#    keep the native 800x600 and put a keyframe every 10 s (at 1 fps).
+RUN sed -i 's/if (attempts > 150) {/if (attempts > 900) {/; s/Timeout waiting for bot to log in (30s)/Timeout waiting for bot to log in (180s)/' /app/server/gateway/launch-bot.ts \
+    && grep -q 'attempts > 900' /app/server/gateway/launch-bot.ts \
+    && sed -i 's/-vf scale=400:300 \\/-g 10 \\/; s/-preset ultrafast -crf 38/-preset ultrafast -crf 30/' /entrypoint.sh \
+    && grep -q -- '-g 10 \\' /entrypoint.sh && grep -q -- '-crf 30' /entrypoint.sh && ! grep -q 'scale=400:300' /entrypoint.sh
 
 # 4. Shared notice board (coordination-aids condition): agent-writable, append-only by convention.
 RUN mkdir -p /var/qb/board /var/qb/inbox /var/qb/reports && chmod 1777 /var/qb/board /var/qb/reports && chmod 755 /var/qb/inbox \

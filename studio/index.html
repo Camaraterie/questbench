@@ -19,7 +19,7 @@ body{font-family:var(--font-body);color:var(--ink);background:#fff}
 .panel-box{border:1px solid var(--line);border-radius:10px;background:#fff;display:flex;flex-direction:column;min-height:0}
 .panel-box>header{padding:.6rem .9rem;border-bottom:1px solid var(--line);font-family:var(--font-display);font-weight:500;display:flex;justify-content:space-between;align-items:center;gap:.5rem}
 .panel-box>.body{padding:.7rem .9rem;overflow:auto}
-.grid3{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr) minmax(0,1fr);gap:1rem;height:calc(100vh - 230px);min-height:520px}
+.grid3{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr) minmax(0,.9fr);gap:1rem;height:calc(100vh - 230px);min-height:520px}
 .grid3 .panel-box .body{flex:1}
 @media(max-width:1100px){.grid3{grid-template-columns:1fr;height:auto}.grid3 .panel-box .body{max-height:60vh}}
 .step{padding:.45rem 0;border-bottom:1px dashed var(--line);font-size:.88rem}
@@ -35,6 +35,12 @@ details summary{cursor:pointer;color:var(--muted);font-size:.78rem}
 .cost{color:var(--muted);font-size:.72rem;font-family:var(--font-mono)}
 .screen{width:100%;aspect-ratio:4/3;background:#111;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#aaa;overflow:hidden}
 .screen img,.screen video{width:100%;height:100%;object-fit:contain}
+.screen img{cursor:zoom-in;image-rendering:auto}
+.screen-full{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;cursor:zoom-out}
+.screen-full img{max-width:100vw;max-height:100vh;width:100%;height:100%;object-fit:contain}
+.reasoning{color:#5b5b5b;font-style:italic;white-space:pre-wrap;border-left:3px solid #d9d0ec;padding-left:.5rem;margin:.1rem 0}
+.reasoning-h{color:var(--pm);font-size:.75rem;font-weight:600}
+.hide-r .rstep{display:none}
 .clock{font-family:var(--font-display);font-size:1.6rem}
 .track{display:flex;gap:.3rem;flex-wrap:wrap;margin:.6rem 0}
 .track span{font-size:.74rem;padding:.25rem .55rem;border-radius:999px;background:var(--panel);color:var(--muted)}
@@ -75,8 +81,8 @@ table.runs tr{cursor:pointer}
     <div class="level-right"><div class="level-item"><span class="clock" id="live-clock">--:--</span></div></div>
   </div>
   <div class="grid3 is-hidden" id="live-grid">
-    <div class="panel-box"><header><span>Agent timeline</span><span class="cost" id="live-cost"></span></header><div class="body" id="live-steps"></div></div>
-    <div class="panel-box"><header><span>Game view</span><span class="has-text-grey is-size-7">refreshes every second</span></header><div class="body">
+    <div class="panel-box"><header><span>Agent timeline</span><span><label class="checkbox is-size-7 has-text-grey" style="margin-right:.5rem"><input type="checkbox" id="live-hide-r"> hide reasoning</label><span class="cost" id="live-cost"></span></span></header><div class="body" id="live-steps"></div></div>
+    <div class="panel-box"><header><span>Game view</span><span class="has-text-grey is-size-7">click to enlarge · refreshes every 2 s</span></header><div class="body">
       <div class="screen" id="live-screen"><span>waiting for screen…</span></div>
       <div class="studio-h" style="margin-top:.8rem;font-weight:500">Partner progress</div>
       <div class="track" id="live-track"></div>
@@ -139,6 +145,7 @@ function renderSteps(steps) {
   if (!steps.length) return '<div class="empty">No agent activity yet.</div>';
   return steps.map(s => {
     const t = `<span class="t">${mmss(s.t)}</span>`;
+    if (s.kind === 'reasoning') return `<div class="step rstep">${t}<span class="reasoning-h"><i class="fas fa-brain"></i> reasoning${s.secs != null ? ` · ${s.secs.toFixed(1)}s` : ''}</span><div class="reasoning">${esc(s.text)}</div></div>`;
     if (s.kind === 'thought') return `<div class="step">${t}<span class="thought"><i class="fas fa-comment-dots"></i> ${esc(s.text)}</span></div>`;
     if (s.kind === 'note') return `<div class="step"><span class="cost">${esc(s.text)}</span></div>`;
     if (s.kind === 'cost') return `<div class="cost" style="padding:.1rem 0 .3rem">↳ in ${s.tokensIn} · out ${s.tokensOut} · reasoning ${s.reasoning} · $${s.cost.toFixed(4)} (total $${s.total.toFixed(3)})</div>`;
@@ -169,10 +176,14 @@ function renderTrack(progress) {
 function stepCost(steps) { const c = [...steps].reverse().find(s => s.kind === 'cost'); return c ? `$${c.total.toFixed(3)}` : ''; }
 
 // ── live ──
-let lastStepCount = -1;
+let lastStepCount = -1, shotLoading = false, fullShot = null;
+$('live-screen').onclick = () => { const img = $('live-screen').querySelector('img'); if (!img) return; fullShot = document.createElement('div'); fullShot.className = 'screen-full'; fullShot.innerHTML = `<img src="${img.src}">`; fullShot.onclick = () => { fullShot.remove(); fullShot = null; }; document.body.appendChild(fullShot); };
+$('live-hide-r').onchange = (e) => $('live-steps').classList.toggle('hide-r', e.target.checked);
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && fullShot) { fullShot.remove(); fullShot = null; } });
+let liveBusy = false;
 async function pollLive() {
-  if (tab !== 'live') return;
-  let s; try { s = await api('/api/live'); } catch { return; }
+  if (tab !== 'live' || liveBusy) return;
+  let s; liveBusy = true; try { s = await api('/api/live'); } catch { return; } finally { liveBusy = false; }
   const live = !!s.live;
   $('live-empty').classList.toggle('is-hidden', live); $('live-grid').classList.toggle('is-hidden', !live); $('live-header').classList.toggle('is-hidden', !live);
   if (!live) return;
@@ -189,7 +200,7 @@ async function pollLive() {
   if (s.warnings) alerts.push(`<div class="notification is-warning is-light notice">${esc(s.warnings)}</div>`);
   if ((s.reports||[]).length) alerts.push(`<div class="notification is-info is-light notice"><b>Agent reports</b><br>${s.reports.map(r => '• ' + esc(r.text)).join('<br>')}</div>`);
   $('live-alerts').innerHTML = alerts.join('');
-  if (!DEMO) { const img = new Image(); img.onload = () => { const sc = $('live-screen'); sc.innerHTML = ''; sc.appendChild(img); }; img.src = '/api/live/screen.png?' + Date.now(); }
+  if (!DEMO && !shotLoading) { shotLoading = true; const img = new Image(); img.onload = () => { shotLoading = false; const sc = $('live-screen'); sc.innerHTML = ''; sc.appendChild(img); if (fullShot) fullShot.querySelector('img').src = img.src; }; img.onerror = () => { shotLoading = false; }; img.src = '/api/live/screen.jpg?' + Date.now(); }
   else if (DEMO.screen) $('live-screen').innerHTML = `<img src="${DEMO.screen}">`;
 }
 

@@ -22,6 +22,11 @@ for i in $(seq 1 120); do
 done
 [ "$STALE" = "1" ] && echo "[collect] WARNING: some saves were not rewritten after logout; scoring last autosave" | tee "$OUT/WARNINGS.txt"
 
+# Stop the screen recorder cleanly so recording.mp4 is complete when Harbor copies /logs/verifier
+# (it used to be copied mid-write and end in a partial fragment).
+pkill -INT -f "ffmpeg -f x11grab"
+for i in $(seq 1 15); do pgrep -f "ffmpeg -f x11grab" >/dev/null || break; sleep 1; done
+
 for f in /app/server/engine/data/players/main/*.sav; do cp "$f" "$OUT/saves/end.$(basename "$f")"; done
 for f in /logs/tracking/start_saves/*.sav; do cp "$f" "$OUT/saves/start.$(basename "$f")"; done
 cp /logs/tracking/events.jsonl "$OUT/events.jsonl" 2>/dev/null || echo "[collect] no events.jsonl (engine patch missing?)" | tee -a "$OUT/WARNINGS.txt"
@@ -46,6 +51,8 @@ try {
 REPORT_COPY
 cp /var/qb/inbox/*.jsonl "$OUT/partners/" 2>/dev/null
 cp /app/.rs-sdk-commit "$OUT/rs-sdk-commit.txt" 2>/dev/null
+# Reasoning text never reaches the harness's JSON log; export it from OpenCode's session database.
+bun /qb/dump-reasoning.ts > "$OUT/agent-reasoning.jsonl"
 env | grep -E '^(QB_|NODE_TICKRATE)' | sort > "$OUT/env.txt"
 bun /qb/check-run.ts "$OUT/events.jsonl" "$OUT/partners" "${QB_AGENT:-agent}" | tee -a "$OUT/WARNINGS.txt"
 date -u +%Y-%m-%dT%H:%M:%SZ > "$OUT/qb_end.txt"
