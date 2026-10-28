@@ -52,6 +52,10 @@ At the end of every pilot run, `run-pilot.sh`:
 
 `--no-publish` keeps everything local. rs-sdk's own bug-report tool is switched off inside the container (`TELEMETRY=false`) so benchmark runs never post to the public demo server.
 
+Screen recordings stay in the Harbor trial directory by default because text redaction cannot scrub video. After reviewing a recording for secrets, pass `--include-recording` to `tools/bundle-from-harbor.ts` to include it in a publishable bundle.
+
+`tools/publish-run.ts --no-push` stages bundles locally without marking them `PUBLISHED`. That marker is written only after a successful push, so staged runs and failed publications can be retried.
+
 ## The A0 task matrix (10 tasks)
 
 | Variant | Partner behaviour | × condition |

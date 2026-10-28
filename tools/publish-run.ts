@@ -4,13 +4,13 @@
  *   bun tools/publish-run.ts [bundles] [--runs-dir ../questbench-runs] [--no-push] [--repo Camaraterie/questbench-runs]
  *
  * - Clones the results repo next to this repo on first use (uses your normal git/gh login).
- * - Copies each not-yet-published bundle to runs/<date>/<task>/<run-id>/ and marks it PUBLISHED locally.
+ * - Copies each not-yet-published bundle to runs/<date>/<task>/<run-id>/.
  * - Rebuilds runs/index.json (one summary row per run), which Studio and the public site read.
- * - Commits and pushes. Re-running is safe: published bundles are skipped.
+ * - Commits and pushes, then marks bundles PUBLISHED locally. Re-running skips published bundles.
  * Only bundles that pass the ingest checks are published.
  */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { verifyBundle } from '../ingest/verify-bundle';
 import { a0MetricsFromBundle } from '../analysis/a0-metrics';
 import { parseSlug } from '../analysis/aggregate';
@@ -61,11 +61,18 @@ export function rebuildIndex(runsDir: string): IndexEntry[] {
 }
 
 export function copyBundle(bundleDir: string, dest: string) {
+    const checkSizes = (src: string) => {
+        if (src === join(bundleDir, 'PUBLISHED')) return;
+        const stat = statSync(src);
+        if (stat.isDirectory()) for (const name of readdirSync(src)) checkSizes(join(src, name));
+        else if (stat.size > MAX_FILE_BYTES) throw new Error(`Bundle file ${src} is ${stat.size} bytes; exceeds MAX_FILE_BYTES (${MAX_FILE_BYTES}).`);
+    };
+    checkSizes(bundleDir);
     mkdirSync(dest, { recursive: true });
-    cpSync(bundleDir, dest, { recursive: true, filter: (src) => !src.endsWith('PUBLISHED') && (statSync(src).isDirectory() || statSync(src).size <= MAX_FILE_BYTES) });
+    cpSync(bundleDir, dest, { recursive: true, filter: (src) => src !== join(bundleDir, 'PUBLISHED') });
 }
 
-export function publishBundles(bundlesDir: string, runsDir: string): string[] {
+export function publishBundles(bundlesDir: string, runsDir: string, onStaged?: (bundleDir: string, rel: string) => void): string[] {
     const published: string[] = [];
     if (!existsSync(bundlesDir)) return published;
     for (const name of readdirSync(bundlesDir)) {
@@ -73,10 +80,16 @@ export function publishBundles(bundlesDir: string, runsDir: string): string[] {
         if (!existsSync(join(b, 'manifest.json')) || existsSync(join(b, 'PUBLISHED'))) continue;
         if (verifyBundle(b).tier === 'rejected') { console.warn(`! ${name} failed ingest checks; not publishing`); continue; }
         const man = readJson(join(b, 'manifest.json'));
+        if (typeof man.task.slug !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(man.task.slug)) throw new Error(`Invalid task.slug in ${b}: expected a lowercase hyphenated slug.`);
+        // Accept UUIDs and legacy run IDs such as r1, all as a single path component.
+        if (typeof man.runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(man.runId)) throw new Error(`Invalid runId in ${b}: expected letters, digits, underscores or hyphens.`);
         const date = (man.startedAt || new Date().toISOString()).slice(0, 10);
         const rel = join('runs', date, man.task.slug, man.runId);
-        copyBundle(b, join(runsDir, rel));
-        writeFileSync(join(b, 'PUBLISHED'), rel + '\n');
+        const dest = resolve(runsDir, rel);
+        const within = relative(resolve(runsDir), dest);
+        if (!within || within === '..' || within.startsWith(`..${sep}`) || isAbsolute(within)) throw new Error(`Bundle destination escapes runsDir: ${rel}`);
+        copyBundle(b, dest);
+        onStaged?.(b, rel);
         published.push(rel);
     }
     mkdirSync(join(runsDir, 'runs'), { recursive: true });
@@ -107,14 +120,17 @@ if (import.meta.main) {
         }
     } else if (push) sh(['git', 'pull', '--rebase', '--autostash'], runsDir);
 
-    const published = publishBundles(bundles, runsDir);
+    const staged: Array<{ bundleDir: string; rel: string }> = [];
+    const published = publishBundles(bundles, runsDir, (bundleDir, rel) => staged.push({ bundleDir, rel }));
     if (!published.length) { console.log('· nothing new to publish'); process.exit(0); }
     console.log(`· ${published.length} run(s) staged:\n  ${published.join('\n  ')}`);
     if (!push) process.exit(0);
-    sh(['git', 'add', 'runs'], runsDir);
+    const a = sh(['git', 'add', 'runs'], runsDir);
+    if (!a.ok) { console.error(a.out); process.exit(1); }
     const c = sh(['git', 'commit', '-m', `runs: add ${published.length} run(s)`], runsDir);
     if (!c.ok && !/nothing to commit/.test(c.out)) { console.error(c.out); process.exit(1); }
     const p = sh(['git', 'push'], runsDir);
     if (!p.ok) { console.error(`✗ push failed (runs are committed locally in ${runsDir}).\n  fix: \`gh auth login\`, then \`git -C ${runsDir} push\`.\n${p.out}`); process.exit(1); }
+    for (const { bundleDir, rel } of staged) writeFileSync(join(bundleDir, 'PUBLISHED'), rel + '\n');
     console.log(`✓ published to https://github.com/${repo}`);
 }

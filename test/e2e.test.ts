@@ -110,6 +110,18 @@ describe('task generation', () => {
 });
 
 describe('offline end-to-end pipeline', () => {
+    test('screen recording is excluded unless explicitly opted in', () => {
+        const job = mkdtempSync(join(tmpdir(), 'qbvideo-'));
+        const { trial } = fakeTrial(job, { slug: 'a0-rendezvous-punctual-bare-15m', success: false, model: 'test', specific: false });
+        const video = Buffer.from('synthetic unredacted video contents');
+        writeFileSync(join(trial, 'verifier', 'recording.mp4'), video);
+        const opts = { out: join(job, 'bundles'), handle: 'tester', licence: 'CC-BY-4.0', tasksDir: join(job, 'no-tasks') };
+        const excluded = bundleTrial(trial, job, opts);
+        expect(existsSync(join(excluded.bundle!, 'recording.mp4'))).toBe(false);
+        const included = bundleTrial(trial, job, { ...opts, includeRecording: true });
+        expect(readFileSync(join(included.bundle!, 'recording.mp4'))).toEqual(video);
+    });
+
     test('job dir -> bundles -> metrics -> results table', async () => {
         const job = mkdtempSync(join(tmpdir(), 'qbjob-'));
         writeFileSync(join(job, 'config.json'), JSON.stringify({ agents: [{ name: 'claude-code', model_name: 'anthropic/test-model' }] }));
