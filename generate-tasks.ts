@@ -32,6 +32,8 @@ const varpPack = arg('varp-pack');
 const { ids: varpIds, source: varpSource } = loadVarpIds(varpPack ? [varpPack] : DEFAULT_VARP_PACK_PATHS);
 
 const llmRole = (t: ResolvedTask) => t.roles.find(r => r.kind === 'llm')!;
+const llmRoles = (t: ResolvedTask) => t.roles.filter(r => r.kind === 'llm');
+const isPair = (t: ResolvedTask) => t.scenario.tier === 'pair';
 
 export function taskToml(t: ResolvedTask): string {
     const tags = ['runescape', 'questbench', 'multi-agent', t.scenario.track, t.scenario.tier, t.scenario.id, `variant-${t.variant.slug}`, t.aids ? 'aids' : 'bare'];
@@ -47,13 +49,15 @@ tags = [${tags.map(s => `"${s}"`).join(', ')}]
 timeout_sec = 400.0
 
 [agent]
-timeout_sec = ${t.minutes * 60 + 120}.0
+# Pair tasks: both seats start only once both clients are in-game (up to ~3 min each), then play
+# the full duration, so the agent phase needs more headroom than the trial itself.
+timeout_sec = ${t.minutes * 60 + (isPair(t) ? 480 : 120)}.0
 # Non-root, as in RuneBench: engine, saves, partners, event log and verifier are root-owned.
 user = "agent"
 
 [environment]
 cpus = 2
-memory_mb = ${8192 + 1024 * t.roles.filter(r => r.kind === 'scripted').length}
+memory_mb = ${8192 + 1024 * t.roles.filter(r => r.kind === 'scripted' || isPair(t)).length}
 storage_mb = 10240
 allow_internet = true
 build_timeout_sec = 1200.0
@@ -79,14 +83,19 @@ ENV BENCHMARK_DURATION_SECS=${t.minutes * 60}
 ${saves}
 COPY partners.json /qb/partners.json
 RUN chown root:root ${PLAYERS_DIR}/*.sav /qb/partners.json && chmod 600 /qb/partners.json
-`;
+${isPair(t) ? `# Both seats' private briefs: root-only; docker/seats/launch.ts hands each seat only its own.
+COPY seats.json /qb/seats.json
+RUN chown root:root /qb/seats.json && chmod 600 /qb/seats.json
+` : ''}`;
 }
 
 export function testSh(t: ResolvedTask): string {
     const roles = t.roles.map(r => r.username).join(',');
     const env = t.scenario.verifier === 'check_quest.ts'
         ? `export QB_ROLES="${roles}"\nexport QB_QUEST="shield-of-arrav"`
-        : `export QB_AGENT="${llmRole(t).username}"\nexport QB_EXPECT_JSON='${JSON.stringify(t.scenario.expect ?? {})}'`;
+        : t.scenario.verifier === 'check_duo.ts'
+            ? `export QB_SEATS_JSON='${JSON.stringify(llmRoles(t).map(r => ({ username: r.username, expect: r.expect })))}'`
+            : `export QB_AGENT="${llmRole(t).username}"\nexport QB_EXPECT_JSON='${JSON.stringify(t.scenario.expect ?? {})}'`;
     return `#!/bin/bash
 set -e
 mkdir -p /logs/verifier
@@ -98,11 +107,16 @@ cd /tests && bun run ${t.scenario.verifier.replace('.ts', '.js')}
 `;
 }
 
-export function instruction(t: ResolvedTask): string {
-    const llm = llmRole(t);
+export function instruction(t: ResolvedTask, llm = llmRole(t)): string {
     const aidsText = t.aids ? readFileSync(join(ROOT, 'aids', 'INSTRUCTIONS.md'), 'utf8') : '';
     const reportText = `\nIf the SDK or this environment seems broken, file a short note with \`bun /qb/aids/report.ts "<what happened>"\` and keep going. Do not use sdk/bug-report.ts.\n`;
     return `${llm.brief}\n\nYou have ${t.minutes} minutes. You control the bot "${llm.username}" via the rs-agent MCP server (execute_code with bot_name: "${llm.username}").\n${reportText}${aidsText}`;
+}
+
+/** Harbor's instruction for a pair task. No model reads it: the seats adapter (agents/qb_seats.py)
+ *  only starts the trial; each seat's real brief is in the root-only /qb/seats.json. */
+export function pairInstruction(t: ResolvedTask): string {
+    return `Two-seat trial ${t.slug}: seats ${llmRoles(t).map(r => r.username).join(' and ')}, ${t.minutes} minutes. Briefs are private to each seat.\n`;
 }
 
 async function bundleVerifier(entry: string, outDir: string) {
@@ -122,11 +136,13 @@ if (import.meta.main) {
         mkdirSync(join(env, 'saves'), { recursive: true });
         mkdirSync(join(tests, 'start'), { recursive: true });
 
-        const llms = t.roles.filter(r => r.kind === 'llm');
-        if (llms.length !== 1) throw new Error(`${t.slug}: lite tier needs exactly one LLM role, got ${llms.length}`);
+        const llms = llmRoles(t);
+        const want = isPair(t) ? 2 : 1;
+        if (llms.length !== want) throw new Error(`${t.slug}: ${t.scenario.tier} tier needs ${want} LLM role(s), got ${llms.length}`);
 
         writeFileSync(join(dir, 'task.toml'), taskToml(t));
-        writeFileSync(join(dir, 'instruction.md'), instruction(t));
+        writeFileSync(join(dir, 'instruction.md'), isPair(t) ? pairInstruction(t) : instruction(t));
+        if (isPair(t)) writeFileSync(join(env, 'seats.json'), JSON.stringify(llms.map(r => ({ username: r.username, brief: instruction(t, r), expect: r.expect })), null, 2));
 
         for (const r of t.roles) {
             const varps = { ...(r.save.varps ?? {}) };

@@ -41,6 +41,13 @@ if [ -f /qb/partners.json ]; then
   done
 fi
 
+# Pair tier: two LLM seats, started together by the launcher once both bots are in-game.
+if [ -f /qb/seats.json ]; then
+  mkdir -p /logs/seats && chmod 711 /logs/seats
+  (cd /qb && nohup bun seats/launch.ts > /logs/seats/launch.log 2>&1 &)
+  echo "[qb] two-seat launcher started"
+fi
+
 if [ "${QB_AIDS:-0}" = "1" ]; then
   (cd /qb && nohup bun aids/inbox-service.ts "${QB_AGENT:-agent}" > /logs/partners/inbox-service.log 2>&1 &)
   echo "[qb] coordination aids enabled"

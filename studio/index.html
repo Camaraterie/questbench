@@ -41,6 +41,8 @@ details summary{cursor:pointer;color:var(--muted);font-size:.78rem}
 .reasoning{color:#5b5b5b;font-style:italic;white-space:pre-wrap;border-left:3px solid #d9d0ec;padding-left:.5rem;margin:.1rem 0}
 .reasoning-h{color:var(--pm);font-size:.75rem;font-weight:600}
 .hide-r .rstep{display:none}
+.events-mini{max-height:34vh;overflow:auto;border-top:1px solid var(--line);margin-top:.4rem}
+.lane-name{font-family:var(--font-mono);font-size:.85rem}
 .clock{font-family:var(--font-display);font-size:1.6rem}
 .track{display:flex;gap:.3rem;flex-wrap:wrap;margin:.6rem 0}
 .track span{font-size:.74rem;padding:.25rem .55rem;border-radius:999px;background:var(--panel);color:var(--muted)}
@@ -81,14 +83,15 @@ table.runs tr{cursor:pointer}
     <div class="level-right"><div class="level-item"><span class="clock" id="live-clock">--:--</span></div></div>
   </div>
   <div class="grid3 is-hidden" id="live-grid">
-    <div class="panel-box"><header><span>Agent timeline</span><span><label class="checkbox is-size-7 has-text-grey" style="margin-right:.5rem"><input type="checkbox" id="live-hide-r"> hide reasoning</label><span class="cost" id="live-cost"></span></span></header><div class="body" id="live-steps"></div></div>
+    <div class="panel-box"><header><span id="lane-a-title">Agent timeline</span><span><label class="checkbox is-size-7 has-text-grey" style="margin-right:.5rem"><input type="checkbox" id="live-hide-r"> hide reasoning</label><span class="cost" id="live-cost"></span></span></header><div class="body" id="live-steps"></div></div>
     <div class="panel-box"><header><span>Game view</span><span class="has-text-grey is-size-7">click to enlarge · refreshes every 2 s</span></header><div class="body">
       <div class="screen" id="live-screen"><span>waiting for screen…</span></div>
-      <div class="studio-h" style="margin-top:.8rem;font-weight:500">Partner progress</div>
-      <div class="track" id="live-track"></div>
+      <div id="track-wrap"><div class="studio-h" style="margin-top:.8rem;font-weight:500">Partner progress</div>
+      <div class="track" id="live-track"></div></div>
       <div id="live-alerts"></div>
+      <div id="duo-events" class="is-hidden"><div class="studio-h" style="margin-top:.8rem;font-weight:500">What the server recorded <span class="has-text-grey is-size-7">chat · PMs · trades</span></div><div class="events-mini" id="live-events-duo"></div></div>
     </div></div>
-    <div class="panel-box"><header><span>What the server recorded</span><span class="has-text-grey is-size-7">chat · PMs · trades</span></header><div class="body" id="live-events"></div></div>
+    <div class="panel-box"><header><span id="col3-title">What the server recorded</span><span class="has-text-grey is-size-7" id="col3-sub">chat · PMs · trades</span></header><div class="body" id="live-events"></div><div class="body is-hidden" id="live-steps-b"></div></div>
   </div>
 </section>
 
@@ -107,15 +110,21 @@ table.runs tr{cursor:pointer}
     <div class="column is-5">
       <div class="panel-box"><header><span>Setup check</span><button class="button is-small is-light" id="pf-refresh">Recheck</button></header><div class="body" id="preflight"></div></div>
       <div class="panel-box" style="margin-top:1rem"><header><span>Start a run</span></header><div class="body">
-        <div class="field"><label class="label is-small">Scenario</label><div class="select is-small is-fullwidth"><select disabled><option>A0 Rendezvous</option></select></div></div>
-        <div class="field"><label class="label is-small">Partner behaviour</label><div class="select is-small is-fullwidth"><select id="l-variant">
+        <div class="field"><label class="label is-small">Scenario</label><div class="select is-small is-fullwidth"><select id="l-scenario">
+          <option value="duo">A0 Rendezvous: two LLMs</option><option value="solo">A0 Rendezvous: LLM + scripted partner (fixture)</option></select></div></div>
+        <div class="field duo-only"><label class="label is-small">Setup</label><div class="select is-small is-fullwidth"><select id="l-duo-variant">
+          <option value="open">open: buyer has coins, seller has bars, price open</option><option value="goal-mismatch">goal-mismatch: seller wants 20 logs, not coins</option></select></div></div>
+        <div class="field duo-only"><label class="label is-small">Models</label><div class="columns is-mobile is-gapless" style="gap:.5rem">
+          <div class="column"><span class="is-size-7 has-text-grey">agent (buyer)</span><div class="select is-small is-fullwidth"><select id="l-model-agent" class="l-model"></select></div></div>
+          <div class="column"><span class="is-size-7 has-text-grey">partner01 (seller)</span><div class="select is-small is-fullwidth"><select id="l-model-partner01" class="l-model"></select></div></div></div></div>
+        <div class="field solo-only"><label class="label is-small">Partner behaviour</label><div class="select is-small is-fullwidth"><select id="l-variant">
           <option value="punctual">punctual: replies fast, waits 10 min</option><option value="late">late: arrives 3 min late</option><option value="drifter">drifter: slow replies, leaves after 90 s</option>
           <option value="vague-only">vague-only: needs a place and a time</option><option value="goal-mismatch">goal-mismatch: wants logs, not coins</option></select></div></div>
-        <div class="field"><label class="label is-small">Tools</label><div class="select is-small is-fullwidth"><select id="l-cond"><option value="bare">bare rs-sdk</option><option value="aided">with coordination aids</option></select></div></div>
+        <div class="field solo-only"><label class="label is-small">Tools</label><div class="select is-small is-fullwidth"><select id="l-cond"><option value="bare">bare rs-sdk</option><option value="aided">with coordination aids</option></select></div></div>
         <div class="field is-grouped"><div class="control"><label class="label is-small">Trials</label><input class="input is-small" id="l-trials" type="number" min="1" max="10" value="1" style="width:5rem"></div>
-          <div class="control" style="padding-top:1.7rem"><label class="checkbox is-size-7"><input type="checkbox" id="l-all"> all 10 A0 tasks</label></div>
+          <div class="control solo-only" style="padding-top:1.7rem"><label class="checkbox is-size-7"><input type="checkbox" id="l-all"> all 10 A0 tasks</label></div>
           <div class="control" style="padding-top:1.7rem"><label class="checkbox is-size-7"><input type="checkbox" id="l-publish" checked> publish results</label></div></div>
-        <p class="is-size-7 has-text-grey" style="margin-bottom:.6rem">Model: GLM-5.3 (z.ai). One trial takes about 17 minutes.</p>
+        <p class="is-size-7 has-text-grey" style="margin-bottom:.6rem" id="l-note">One trial takes about 17 minutes.</p>
         <div class="buttons"><button class="button is-dark is-rounded" id="l-go"><span class="icon"><i class="fas fa-play"></i></span><span>Run</span></button><button class="button is-rounded is-light" id="l-stop">Stop</button></div>
       </div></div>
     </div>
@@ -176,9 +185,16 @@ function renderTrack(progress) {
 function stepCost(steps) { const c = [...steps].reverse().find(s => s.kind === 'cost'); return c ? `$${c.total.toFixed(3)}` : ''; }
 
 // ── live ──
-let lastStepCount = -1, shotLoading = false, fullShot = null;
+let shotLoading = false, fullShot = null;
 $('live-screen').onclick = () => { const img = $('live-screen').querySelector('img'); if (!img) return; fullShot = document.createElement('div'); fullShot.className = 'screen-full'; fullShot.innerHTML = `<img src="${img.src}">`; fullShot.onclick = () => { fullShot.remove(); fullShot = null; }; document.body.appendChild(fullShot); };
-$('live-hide-r').onchange = (e) => $('live-steps').classList.toggle('hide-r', e.target.checked);
+$('live-hide-r').onchange = (e) => ['live-steps', 'live-steps-b'].forEach(id => $(id).classList.toggle('hide-r', e.target.checked));
+const laneCounts = {};
+function renderLane(id, steps) {
+  const box = $(id); const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+  if (steps.length === laneCounts[id]) return;
+  const first = laneCounts[id] == null; box.innerHTML = renderSteps(steps); laneCounts[id] = steps.length;
+  if (atBottom || first) box.scrollTop = box.scrollHeight;
+}
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && fullShot) { fullShot.remove(); fullShot = null; } });
 let liveBusy = false;
 async function pollLive() {
@@ -189,14 +205,27 @@ async function pollLive() {
   if (!live) return;
   $('live-task').textContent = s.task; $('live-aids').textContent = s.aids ? 'coordination aids' : 'bare tools';
   if (s.startedAt) { const left = s.durationSecs - Math.round((Date.now() - Date.parse(s.startedAt)) / 1000); $('live-clock').textContent = left > 0 ? `${mmss(left)} left` : 'scoring…'; }
-  const box = $('live-steps'); const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
-  if (s.steps.length !== lastStepCount) { box.innerHTML = renderSteps(s.steps); if (atBottom || lastStepCount < 0) box.scrollTop = box.scrollHeight; lastStepCount = s.steps.length; }
-  $('live-cost').textContent = stepCost(s.steps);
-  $('live-events').innerHTML = renderEvents(s.events);
-  $('live-track').innerHTML = renderTrack(s.progress);
+  // Two LLM seats: seat A on the left, seat B on the right, server record under the game view.
+  const duo = (s.seats || []).length === 2;
+  ['duo-events', 'live-steps-b'].forEach(id => $(id).classList.toggle('is-hidden', !duo));
+  $('live-events').classList.toggle('is-hidden', duo); $('track-wrap').classList.toggle('is-hidden', duo);
+  if (duo) {
+    const [a, b] = s.seats;
+    $('lane-a-title').innerHTML = `<span class="lane-name">${esc(a.username)}</span> · ${stepCost(a.steps) || 'timeline'}`;
+    $('col3-title').innerHTML = `<span class="lane-name">${esc(b.username)}</span> · ${stepCost(b.steps) || 'timeline'}`; $('col3-sub').textContent = '';
+    renderLane('live-steps', a.steps); renderLane('live-steps-b', b.steps); $('live-cost').textContent = '';
+    $('live-events-duo').innerHTML = renderEvents(s.events);
+  } else {
+    $('lane-a-title').textContent = 'Agent timeline'; $('col3-title').textContent = 'What the server recorded'; $('col3-sub').textContent = 'chat · PMs · trades';
+    renderLane('live-steps', s.steps);
+    $('live-cost').textContent = stepCost(s.steps);
+    $('live-events').innerHTML = renderEvents(s.events);
+    $('live-track').innerHTML = renderTrack(s.progress);
+  }
   const alerts = [];
-  if (s.partnerError) alerts.push(`<div class="notification is-danger is-light notice"><b>Partner bot failed to log in.</b> This trial can't measure cooperation.<pre class="out err">${esc(s.partnerError)}</pre></div>`);
-  else if (!s.partnerLoggedIn) alerts.push('<div class="notification is-warning is-light notice">Waiting for the partner bot to log in…</div>');
+  if (s.partnerError) alerts.push(`<div class="notification is-danger is-light notice"><b>${duo ? 'The second player\'s client' : 'Partner bot'} failed to log in.</b> This trial can't measure cooperation.<pre class="out err">${esc(s.partnerError)}</pre></div>`);
+  else if (!s.partnerLoggedIn) alerts.push(`<div class="notification is-warning is-light notice">Waiting for the ${duo ? 'second player\'s client' : 'partner bot'} to log in…</div>`);
+  if (duo && s.seats.every(x => !x.steps.length)) alerts.push('<div class="notification is-info is-light notice">Both seats start together once both players are in-game.</div>');
   if (s.warnings) alerts.push(`<div class="notification is-warning is-light notice">${esc(s.warnings)}</div>`);
   if ((s.reports||[]).length) alerts.push(`<div class="notification is-info is-light notice"><b>Agent reports</b><br>${s.reports.map(r => '• ' + esc(r.text)).join('<br>')}</div>`);
   $('live-alerts').innerHTML = alerts.join('');
@@ -209,7 +238,7 @@ async function loadRuns() {
   const runs = await api('/api/runs');
   $('runs-count').textContent = `${runs.length} run${runs.length === 1 ? '' : 's'}`;
   $('runs-empty').classList.toggle('is-hidden', runs.length > 0);
-  $('runs-body').innerHTML = runs.map(r => `<tr data-id="${esc(r.id)}"><td>${esc((r.slug||'').replace(/^a0-rendezvous-/, 'A0 · '))}<br><span class="is-size-7 has-text-grey">${esc((r.startedAt||'').replace('T',' ').slice(0,16))}</span></td><td><span class="tag is-light is-model">${esc((r.model||'').split('/').pop())}</span></td><td>${r.success === true ? '<span class="tag is-success is-light">traded</span>' : r.success === false ? '<span class="tag is-danger is-light">no trade</span>' : '<span class="tag">–</span>'}</td></tr>`).join('');
+  $('runs-body').innerHTML = runs.map(r => `<tr data-id="${esc(r.id)}"><td>${esc((r.slug||'').replace(/^a0-rendezvous-/, 'A0 · ').replace(/^a0-duo-/, 'A0 two LLMs · '))}<br><span class="is-size-7 has-text-grey">${esc((r.startedAt||'').replace('T',' ').slice(0,16))}</span></td><td><span class="tag is-light is-model">${esc((r.model||'').split('/').pop())}</span></td><td>${r.success === true ? '<span class="tag is-success is-light">traded</span>' : r.success === false ? '<span class="tag is-danger is-light">no trade</span>' : '<span class="tag">–</span>'}</td></tr>`).join('');
   document.querySelectorAll('#runs-body tr').forEach(tr => tr.onclick = () => openRun(tr.dataset.id));
 }
 async function openRun(id) {
@@ -220,10 +249,15 @@ async function openRun(id) {
     <div class="level-right">${r.success === true ? '<span class="tag is-success is-medium">Trade completed</span>' : r.success === false ? '<span class="tag is-danger is-light is-medium">No trade</span>' : ''}</div></div>
     ${r.warnings ? `<div class="notification is-warning is-light notice">${esc(r.warnings)}</div>` : ''}
     <div class="columns"><div class="column is-6"><div class="panel-box"><header><span>Game video</span></header><div class="body">${r.hasVideo && !DEMO ? `<div class="screen"><video controls src="/api/runs/${encodeURIComponent(id)}/video.mp4"></video></div>` : '<div class="screen"><span>no video in this run</span></div>'}
-      <div class="studio-h" style="margin-top:.8rem;font-weight:500">Partner progress</div><div class="track">${renderTrack(r.progress)}</div>
+      ${r.seats ? seatResults(r.verdict) : `<div class="studio-h" style="margin-top:.8rem;font-weight:500">Partner progress</div><div class="track">${renderTrack(r.progress)}</div>`}
       ${(r.reports||[]).length ? `<div class="notification is-info is-light notice"><b>Agent reports</b><br>${r.reports.map(x => '• ' + esc(x.text)).join('<br>')}</div>` : ''}</div></div></div>
       <div class="column is-6"><div class="panel-box" style="max-height:480px"><header><span>What the server recorded</span></header><div class="body">${renderEvents(r.events)}</div></div></div></div>
-    <div class="panel-box"><header><span>Agent timeline</span><span class="cost">${stepCost(r.steps)}</span></header><div class="body" style="max-height:70vh">${renderSteps(r.steps)}</div></div>`;
+    ${r.seats ? `<div class="columns">${r.seats.map(x => `<div class="column is-6"><div class="panel-box"><header><span class="lane-name">${esc(x.username)}</span><span class="cost">${stepCost(x.steps)}</span></header><div class="body" style="max-height:70vh">${renderSteps(x.steps)}</div></div></div>`).join('')}</div>`
+      : `<div class="panel-box"><header><span>Agent timeline</span><span class="cost">${stepCost(r.steps)}</span></header><div class="body" style="max-height:70vh">${renderSteps(r.steps)}</div></div>`}`;
+}
+function seatResults(v) {
+  if (!v || !v.seats) return '';
+  return `<div class="studio-h" style="margin-top:.8rem;font-weight:500">Each seat</div><div class="track">${Object.entries(v.seats).map(([n, x]) => `<span class="${x.fairTradeCompleted ? 'on' : x.netValue < 0 ? 'bad' : ''}">${esc(n)}: ${x.fairTradeCompleted ? 'got what it wanted' : x.unchanged ? 'nothing changed' : 'partial'}</span>`).join('')}</div>`;
 }
 
 // ── launch ──
@@ -232,9 +266,22 @@ async function loadPreflight() {
   $('preflight').innerHTML = checks.map(c => `<div class="check is-size-7" style="padding:.2rem 0">${c.ok ? '<i class="fas fa-check has-text-success"></i>' : '<i class="fas fa-xmark has-text-danger"></i>'} ${esc(c.name)}${c.ok ? '' : `<div class="has-text-grey" style="margin-left:1.3rem">${esc(c.fix)}</div>`}</div>`).join('');
 }
 $('pf-refresh').onclick = loadPreflight;
+// Models each seat can use; more providers come with keys in .env.local (step 2).
+const MODELS = [{ id: 'zai-coding-plan/glm-5.3', label: 'GLM-5.3 (z.ai)' }];
+document.querySelectorAll('.l-model').forEach(sel => sel.innerHTML = MODELS.map(m => `<option value="${m.id}">${esc(m.label)}</option>`).join(''));
+function syncScenario() {
+  const duo = $('l-scenario').value === 'duo';
+  document.querySelectorAll('.duo-only').forEach(e => e.classList.toggle('is-hidden', !duo));
+  document.querySelectorAll('.solo-only').forEach(e => e.classList.toggle('is-hidden', duo));
+  $('l-note').textContent = duo ? 'Both seats start together once both players are in-game. One trial takes about 20 minutes.' : 'Model: GLM-5.3 (z.ai). One trial takes about 17 minutes.';
+}
+$('l-scenario').onchange = syncScenario; syncScenario();
 $('l-go').onclick = async () => {
   if (DEMO) return;
-  const body = { variant: `${$('l-variant').value}-${$('l-cond').value}`, all: $('l-all').checked, trials: Number($('l-trials').value), publish: $('l-publish').checked };
+  const duo = $('l-scenario').value === 'duo';
+  const body = duo
+    ? { duo: true, variant: $('l-duo-variant').value, seatModels: { agent: $('l-model-agent').value, partner01: $('l-model-partner01').value }, trials: Number($('l-trials').value), publish: $('l-publish').checked }
+    : { variant: `${$('l-variant').value}-${$('l-cond').value}`, all: $('l-all').checked, trials: Number($('l-trials').value), publish: $('l-publish').checked };
   const r = await api('/api/launch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   if (!r.ok) alert(r.error || 'could not start'); pollLaunch();
 };

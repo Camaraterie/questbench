@@ -18,13 +18,15 @@ export interface Role {
     varpsByName?: Record<string, number>;
     /** Private brief for this role. For the LLM role this becomes instruction.md. */
     brief: string;
+    /** Pair tier: what this seat should have gained/given up for its own trade to count. */
+    expect?: TradeExpect;
 }
 
 export interface Variant {
     /** appended to the scenario id: <id>-<variant.slug>-<minutes>m */
     slug: string;
     /** which roles' policies change in this variant */
-    overrides: Record<string, Partial<Pick<Role, 'policy' | 'params' | 'brief'>>>;
+    overrides: Record<string, Partial<Pick<Role, 'policy' | 'params' | 'brief' | 'expect'>>>;
     note: string;
 }
 

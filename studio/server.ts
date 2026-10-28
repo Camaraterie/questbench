@@ -47,7 +47,8 @@ async function run(cmd: string[], stdin?: string): Promise<{ ok: boolean; out: s
         return { ok: (await p.exited) === 0, out: new TextDecoder().decode(bytes), bytes };
     } catch { return { ok: false, out: '', bytes: new Uint8Array() }; }
 }
-const TASK_RE = /(a0-rendezvous|a1-shield-of-arrav|c1-hidden-role-trade)/i;
+// Harbor names trial containers <task-slug>__<trial>__...; task slugs start with a track letter + number.
+const TASK_RE = /^[a-e]\d-[\w-]+__/i;
 let containerCache = { at: 0, name: null as string | null };
 export async function findContainer(): Promise<string | null> {
     if (MOCK) return 'mock';
@@ -60,8 +61,10 @@ const LIVE_FILES = {
     agent: '/logs/agent/opencode*.txt', partner: '/logs/partners/partner01.jsonl', start: '/logs/tracking/qb_start.txt',
     warnings: '/logs/partners/WARNINGS.txt', lite: '/logs/partners/partner01.lite.log', events: '/logs/tracking/events.jsonl',
     reports: '/var/qb/reports/reports.jsonl', board: '/var/qb/board/board.jsonl',
+    seats: '/logs/seats/seats.json', seatLite: '/logs/seats/partner01.lite.log',
 };
-type LiveFiles = Record<keyof typeof LIVE_FILES | 'env' | 'reasoning', string>;
+type LiveFiles = Record<keyof typeof LIVE_FILES | 'env' | 'reasoning', string> & { seatLanes?: SeatLane[] };
+interface SeatLane { username: string; user: string; log: string; reasoning: string }
 const SEP = '\n<<<QB-STUDIO:';
 async function readLive(container: string): Promise<LiveFiles> {
     if (MOCK) {
@@ -71,7 +74,8 @@ async function readLive(container: string): Promise<LiveFiles> {
             const p = join(MOCK, rel); return existsSync(p) ? readFileSync(p, 'utf8') : '';
         };
         const out = Object.fromEntries(Object.entries(LIVE_FILES).map(([k, p]) => [k, read(p)])) as LiveFiles;
-        return { ...out, env: 'QB_TASK=a0-rendezvous-punctual-bare-15m\nQB_DURATION_SECS=900', reasoning: read('/logs/agent/reasoning.jsonl') };
+        const seatLanes = out.seats ? (JSON.parse(out.seats) as Array<{ username: string; user: string }>).map(x => ({ ...x, log: read(`/logs/seats/${x.username}/opencode.txt`), reasoning: read(`/logs/seats/${x.username}/reasoning.jsonl`) })) : undefined;
+        return { ...out, env: 'QB_TASK=a0-rendezvous-punctual-bare-15m\nQB_DURATION_SECS=900', reasoning: read('/logs/agent/reasoning.jsonl'), seatLanes };
     }
     const script = [`printf '${SEP}env>>>\\n'; env | grep ^QB_`, ...Object.entries(LIVE_FILES).map(([k, p]) => `printf '${SEP}${k}>>>\\n'; cat ${p} 2>/dev/null`)].join('; ');
     const [files, reasoning] = await Promise.all([
@@ -80,7 +84,19 @@ async function readLive(container: string): Promise<LiveFiles> {
     ]);
     const out: Record<string, string> = { reasoning: reasoning.out };
     for (const chunk of files.out.split(SEP).slice(1)) { const i = chunk.indexOf('>>>\n'); if (i > 0) out[chunk.slice(0, i)] = chunk.slice(i + 4); }
-    return out as LiveFiles;
+    // Pair tier: each seat's OpenCode log and reasoning (second round; seat names come from seats.json).
+    let seatLanes: SeatLane[] | undefined;
+    try {
+        const seats = out.seats?.trim() ? JSON.parse(out.seats) as Array<{ username: string; user: string }> : [];
+        if (seats.length) seatLanes = await Promise.all(seats.filter(x => /^[a-z0-9_]+$/.test(x.username) && /^seat\d+$/.test(x.user)).map(async x => {
+            const [log, r] = await Promise.all([
+                run(['docker', 'exec', container, 'cat', `/logs/seats/${x.username}/opencode.txt`]),
+                run(['docker', 'exec', '-i', container, 'bun', '-', `/home/${x.user}/.local/share/opencode/opencode.db`], DUMP_REASONING),
+            ]);
+            return { ...x, log: log.out, reasoning: r.out };
+        }));
+    } catch { /* seats.json mid-write */ }
+    return { ...(out as LiveFiles), seatLanes };
 }
 // Images built before docker/dump-reasoning.ts existed lack it, so Studio pipes its own copy in.
 const DUMP_REASONING = readFileSync(join(ROOT, 'docker', 'dump-reasoning.ts'), 'utf8');
@@ -90,7 +106,7 @@ async function buildSnapshot() {
     if (!c) return { live: false };
     const f = await readLive(c);
     const env = Object.fromEntries((f.env ?? '').split('\n').filter(l => l.includes('=')).map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
-    const partner = parseJsonl(f.partner ?? ''), lite = f.lite ?? '';
+    const partner = parseJsonl(f.partner ?? ''), lite = f.lite || f.seatLite || '';
     return {
         live: true, container: c, task: env.QB_TASK ?? '', aids: env.QB_AIDS === '1', durationSecs: Number(env.QB_DURATION_SECS ?? 900), startedAt: (f.start ?? '').trim(),
         steps: parseTrajectory(f.agent ?? '', parseJsonl(f.reasoning ?? '')),
@@ -99,6 +115,7 @@ async function buildSnapshot() {
         partnerLoggedIn: /logged into/.test(lite), partnerError: /ConnectionRefused|error:/i.test(lite) && !/logged into/.test(lite) ? lite.split('\n').filter(Boolean).slice(-3).join('\n') : null,
         reports: parseJsonl(f.reports ?? ''), board: parseJsonl(f.board ?? ''),
         warnings: (f.warnings ?? '').trim() || null,
+        seats: f.seatLanes?.map(x => ({ username: x.username, steps: parseTrajectory(x.log, parseJsonl(x.reasoning)) })),
     };
 }
 let liveCache: { at: number; p: Promise<any> } = { at: 0, p: Promise.resolve(null) };
@@ -134,7 +151,8 @@ const readText = (p: string) => (existsSync(p) ? readFileSync(p, 'utf8') : '');
 function runSummary(r: RunRef) {
     const m = readJson(join(r.dir, 'manifest.json')) ?? {};
     const v = readJson(join(r.dir, 'verdict.json'));
-    return { id: r.id, source: r.source, slug: m.task?.slug, model: m.model?.id, harness: m.model?.harness, startedAt: m.startedAt, contributor: m.contributor?.handle,
+    const seatModels = Array.isArray(m.seats) ? m.seats.map((x: any) => x.model) : null;
+    return { id: r.id, source: r.source, slug: m.task?.slug, model: seatModels ? seatModels.join(' vs ') : m.model?.id, harness: m.model?.harness, startedAt: m.startedAt, contributor: m.contributor?.handle,
         success: v ? !!(v.jointCompletion ?? v.fairTradeCompleted) : null, reward: v?.reward ?? null, hasVideo: existsSync(join(r.dir, 'recording.mp4')), costUsd: m.usage?.costUsd ?? null };
 }
 
@@ -146,7 +164,12 @@ function runDetail(r: RunRef) {
     const partner = parseJsonl(readText(join(r.dir, 'partners', 'partner01.jsonl')));
     return { ...runSummary(r), manifest: readJson(join(r.dir, 'manifest.json')), verdict: readJson(join(r.dir, 'verdict.json')),
         steps: parseTrajectory(agentLog, parseJsonl(readText(join(r.dir, 'agent-reasoning.jsonl')))), events: parseJsonl(readText(join(r.dir, 'events.jsonl'))), partner, progress: partnerProgress(partner),
-        reports: parseJsonl(readText(join(r.dir, 'reports.jsonl'))), warnings: readText(join(r.dir, 'WARNINGS.txt')).trim() || null };
+        reports: parseJsonl(readText(join(r.dir, 'reports.jsonl'))), warnings: readText(join(r.dir, 'WARNINGS.txt')).trim() || null,
+        seats: seatLanes(r.dir) };
+}
+function seatLanes(dir: string) {
+    const list = readJson(join(dir, 'seats', 'seats.json')) as Array<{ username: string }> | null;
+    return list?.map(({ username }) => ({ username, steps: parseTrajectory(readText(join(dir, 'seats', username, 'opencode.txt')), parseJsonl(readText(join(dir, 'seats', username, 'reasoning.jsonl')))) }));
 }
 
 // ── Preflight + launch ──
@@ -163,10 +186,18 @@ function preflight() {
 }
 
 let launch: { proc: ReturnType<typeof Bun.spawn> | null; log: string; startedAt: string | null; args: string[] } = { proc: null, log: '', startedAt: null, args: [] };
-async function startLaunch(body: { variant?: string; all?: boolean; trials?: number; publish?: boolean }) {
+const MODEL_RE = /^[\w.-]+\/[\w.:-]+$/;
+async function startLaunch(body: { variant?: string; all?: boolean; trials?: number; publish?: boolean; duo?: boolean; seatModels?: Record<string, string> }) {
     if (launch.proc && launch.proc.exitCode === null) return { ok: false, error: 'A run is already in progress' };
-    const args = ['./scripts/run-pilot.sh', '--glm', '--runebench', '../RuneBench', '-k', String(Math.max(1, Math.min(10, body.trials ?? 1)))];
-    if (body.all) args.push('--all'); else if (body.variant && /^[a-z-]+$/.test(body.variant)) args.push('-t', body.variant);
+    const trials = String(Math.max(1, Math.min(10, body.trials ?? 1)));
+    const args = body.duo
+        ? ['./scripts/run-pilot.sh', '--duo', '-k', trials]
+        : ['./scripts/run-pilot.sh', '--glm', '--runebench', '../RuneBench', '-k', trials];
+    if (body.duo) {
+        if (body.variant && /^[a-z-]+$/.test(body.variant)) args.push('-t', `a0-duo-${body.variant}-15m`);
+        const pairs = Object.entries(body.seatModels ?? {}).filter(([seat, m]) => /^[a-z0-9_]+$/.test(seat) && MODEL_RE.test(m));
+        if (pairs.length) args.push('--seat-models', pairs.map(([seat, m]) => `${seat}=${m}`).join(','));
+    } else if (body.all) args.push('--all'); else if (body.variant && /^[a-z-]+$/.test(body.variant)) args.push('-t', body.variant);
     if (body.publish === false) args.push('--no-publish');
     const proc = Bun.spawn(['bash', ...args], { cwd: ROOT, env: launchEnv, stdout: 'pipe', stderr: 'pipe' });
     launch = { proc, log: '', startedAt: new Date().toISOString(), args };

@@ -56,6 +56,14 @@ const TEXT_EXT = /\.(json|jsonl|md|txt|log|ts|js|sh|toml|ya?ml)$/i;
 
 export interface BundleOptions { out: string; handle: string; licence: string; imageDigest?: string; tasksDir: string; includeRecording?: boolean }
 
+export function pairSeats(qb: string): Array<{ username: string; model: string }> | undefined {
+    const list = join(qb, 'seats', 'seats.json');
+    if (!existsSync(list)) return undefined;
+    const launch = existsSync(join(qb, 'seats', 'launch.log')) ? readFileSync(join(qb, 'seats', 'launch.log'), 'utf8') : '';
+    return (JSON.parse(readFileSync(list, 'utf8')) as Array<{ username: string }>).map(({ username }) =>
+        ({ username, model: launch.match(new RegExp(`starting seat ${username} as \\S+ \\(([^)]+)\\)`))?.[1] ?? 'unknown' }));
+}
+
 export function bundleTrial(trialDir: string, jobDir: string, opts: BundleOptions) {
     const qb = join(trialDir, 'verifier', 'qb');
     if (!existsSync(qb)) return { trialDir, skipped: 'no verifier/qb (not a QuestBench trial, or collection failed)' };
@@ -85,12 +93,14 @@ export function bundleTrial(trialDir: string, jobDir: string, opts: BundleOption
         conditions: { aids: env.QB_AIDS === '1', durationSecs: Number(env.QB_DURATION_SECS ?? 0) },
         usage: result?.agent_result ? { inputTokens: result.agent_result.n_input_tokens ?? 0, outputTokens: result.agent_result.n_output_tokens ?? 0, cacheTokens: result.agent_result.n_cache_tokens ?? 0, costUsd: result.agent_result.cost_usd ?? null } : undefined,
         provenance: { imageDigestKnown: !!opts.imageDigest, taskDigestFromLocalTasksDir: existsSync(taskDir) },
+        // Pair tier: who played each seat (docker/seats/launch.ts logs "starting seat <bot> as <user> (<model>)").
+        seats: pairSeats(qb),
     };
 
     writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
     if (existsSync(join(qb, 'events.jsonl'))) cpSync(join(qb, 'events.jsonl'), join(dir, 'events.jsonl')); else writeFileSync(join(dir, 'events.jsonl'), '');
     cpSync(join(qb, 'saves'), join(dir, 'saves'), { recursive: true });
-    for (const extra of ['partners', 'board.jsonl', 'trade_ledger.jsonl', 'WARNINGS.txt', 'reports.jsonl', 'agent-reasoning.jsonl']) if (existsSync(join(qb, extra))) cpSync(join(qb, extra), join(dir, extra), { recursive: true });
+    for (const extra of ['partners', 'board.jsonl', 'trade_ledger.jsonl', 'WARNINGS.txt', 'reports.jsonl', 'agent-reasoning.jsonl', 'seats']) if (existsSync(join(qb, extra))) cpSync(join(qb, extra), join(dir, extra), { recursive: true });
     if (existsSync(join(trialDir, 'verifier', 'reward.json'))) cpSync(join(trialDir, 'verifier', 'reward.json'), join(dir, 'verdict.json'));
     if (existsSync(join(trialDir, 'agent'))) cpSync(join(trialDir, 'agent'), join(dir, 'agent'), { recursive: true });
     // Screen recordings cannot be text-redacted. Opt in only after reviewing the video for secrets.

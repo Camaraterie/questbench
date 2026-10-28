@@ -147,11 +147,22 @@ describe('bundle ingest', () => {
 });
 
 describe('scenarios', () => {
-    test('every task has exactly one LLM role and a unique slug', () => {
+    test('lite tasks have one LLM role, pair tasks two (each with its own expectation); slugs unique', () => {
         const tasks = resolveTasks();
         expect(tasks.length).toBeGreaterThan(0);
         expect(new Set(tasks.map(t => t.slug)).size).toBe(tasks.length);
-        for (const t of tasks) expect(t.roles.filter(r => r.kind === 'llm').length).toBe(1);
+        for (const t of tasks) {
+            const llms = t.roles.filter(r => r.kind === 'llm');
+            expect(llms.length).toBe(t.scenario.tier === 'pair' ? 2 : 1);
+            if (t.scenario.tier === 'pair') for (const r of llms) expect(r.expect).toBeDefined();
+        }
+    });
+    test('pair variant overrides replace a seat\'s brief and expectation', () => {
+        const t = resolveTasks().find(t => t.slug === 'a0-duo-goal-mismatch-15m')!;
+        const seller = t.roles.find(r => r.username === 'partner01')!;
+        expect(seller.expect!.gain).toEqual([{ id: 1511, count: 20 }]);
+        expect(seller.brief).toContain('20 logs');
+        expect(t.roles.find(r => r.username === 'agent')!.brief).not.toContain('logs');
     });
     test('variant overrides apply to the right role', () => {
         const t = resolveTasks().find(t => t.slug === 'a1-shield-of-arrav-defect-30m')!;

@@ -48,9 +48,18 @@ RUN sed -i 's/if (attempts > 150) {/if (attempts > 900) {/; s/Timeout waiting fo
     && sed -i 's/-vf scale=400:300 \\/-g 10 \\/; s/-preset ultrafast -crf 38/-preset ultrafast -crf 30/' /entrypoint.sh \
     && grep -q -- '-g 10 \\' /entrypoint.sh && grep -q -- '-crf 30' /entrypoint.sh && ! grep -q 'scale=400:300' /entrypoint.sh
 
+# 3c. Pair tier (two LLM seats, docker/seats/): OpenCode baked in (single-seat runs install it via
+#     Harbor instead), and one Unix user per seat with a private home. /seats holds the per-seat
+#     workspaces, created at trial start by docker/seats/launch.ts.
+RUN BUN_INSTALL=/opt/bun bun install -g opencode-ai@1.19.4 \
+    && ln -sf /opt/bun/bin/opencode /usr/local/bin/opencode && opencode --version \
+    && for u in seat1 seat2; do useradd -m -s /bin/bash "$u" && chmod 700 "/home/$u"; done \
+    && mkdir -p /seats && chmod 755 /seats
+COPY docker/seats /qb/seats
+
 # 4. Shared notice board (coordination-aids condition): agent-writable, append-only by convention.
 RUN mkdir -p /var/qb/board /var/qb/inbox /var/qb/reports && chmod 1777 /var/qb/board /var/qb/reports && chmod 755 /var/qb/inbox \
-    && chown -R root:root /qb && chmod 700 /qb-entrypoint.sh /qb/collect-artifacts.sh \
+    && chown -R root:root /qb && chmod 700 /qb-entrypoint.sh /qb/collect-artifacts.sh /qb/seats/launch.ts && chmod 755 /qb/seats /qb/seats/run-seat.sh \
     # Partner policies and helpers are hidden from the agent (it must not read its counterpart's
     # strategy); the aids stay world-readable because the agent uses them in the aided condition.
     && chmod -R go-rwx /qb/partners /qb/src /qb/engine && chmod -R a+rX /qb/aids && chmod 711 /qb
