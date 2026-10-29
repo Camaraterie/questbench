@@ -13,6 +13,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveTasks, type ResolvedTask } from './src/scenarios';
 import { customScenario } from './src/scenarios/custom';
+import { returnPlan } from './src/continuity';
 import { writeSave } from './src/save/write';
 import { DEFAULT_VARP_PACK_PATHS, loadVarpIds, varpId } from './src/save/varps';
 
@@ -52,7 +53,7 @@ timeout_sec = 400.0
 [agent]
 # Pair tasks: both seats start only once both clients are in-game (up to ~3 min each), then play
 # the full duration, so the agent phase needs more headroom than the trial itself.
-timeout_sec = ${t.minutes * 60 + (isPair(t) ? 480 : 120)}.0
+timeout_sec = ${t.minutes * 60 + (isPair(t) ? 960 : 120)}.0
 # Non-root, as in RuneBench: engine, saves, partners, event log and verifier are root-owned.
 user = "agent"
 
@@ -78,6 +79,9 @@ ENV QB_TASK=${t.slug}
 ENV QB_DURATION_SECS=${t.minutes * 60}
 ENV QB_AIDS=${t.aids ? 1 : 0}
 ENV QB_EXPLORATORY=${t.variant.exploratory ? 1 : 0}
+ENV QB_IMAGE=${QB_IMAGE}
+ENV QB_IMAGE_DIGEST=${process.env.QB_IMAGE_DIGEST ?? ''}
+ENV QB_IMAGE_DIGEST_KIND=${process.env.QB_IMAGE_DIGEST_KIND ?? 'unknown'}
 ENV QB_AGENT=${llmRole(t).username}
 ENV SAMPLE_INTERVAL_MS=15000
 ENV GATEWAY_URL=ws://localhost:7780
@@ -130,8 +134,12 @@ async function bundleVerifier(entry: string, outDir: string) {
 
 if (import.meta.main) {
     const scenarioFile = arg('scenario-file');
+    const resumeBundle = arg('resume-bundle');
+    if (scenarioFile && resumeBundle) throw new Error('Choose a custom scenario or a character return');
+    const returning = resumeBundle ? returnPlan(resumeBundle) : undefined;
     const custom = scenarioFile ? customScenario(JSON.parse(readFileSync(scenarioFile, 'utf8'))) : undefined;
-    const tasks = resolveTasks(custom ? [custom] : undefined).filter(t => !only || t.slug.includes(only));
+    const tasks = resolveTasks(returning ? [returning.scenario] : custom ? [custom] : undefined).filter(t => !only || t.slug.includes(only));
+    if (!tasks.length) throw new Error('No matching tasks');
     rmSync(TASKS, { recursive: true, force: true });
     console.log(`Generating ${tasks.length} tasks (varp ids from ${varpSource}; image ${QB_IMAGE})`);
 
@@ -147,19 +155,20 @@ if (import.meta.main) {
 
         writeFileSync(join(dir, 'task.toml'), taskToml(t));
         writeFileSync(join(dir, 'instruction.md'), isPair(t) ? pairInstruction(t) : instruction(t));
-        if (isPair(t)) writeFileSync(join(env, 'seats.json'), JSON.stringify(llms.map(r => ({ username: r.username, brief: instruction(t, r), expect: r.expect, sessionPolicy: r.sessionPolicy ?? 'finish', discloseDeadline: r.discloseDeadline ?? true })), null, 2));
+        if (isPair(t)) writeFileSync(join(env, 'seats.json'), JSON.stringify(llms.map(r => ({ username: r.username, brief: instruction(t, r), expect: r.expect, sessionPolicy: r.sessionPolicy ?? 'finish', discloseDeadline: r.discloseDeadline ?? true, initialJournal: r.initialJournal })), null, 2));
 
         for (const r of t.roles) {
             const varps = { ...(r.save.varps ?? {}) };
             for (const [name, v] of Object.entries(r.varpsByName ?? {})) varps[varpId(varpIds, name)] = v;
-            const sav = writeSave({ ...r.save, varps });
+            const sav = returning?.saves[r.username] ?? writeSave({ ...r.save, varps });
             writeFileSync(join(env, 'saves', `${r.username}.sav`), sav);
             writeFileSync(join(tests, 'start', `${r.username}.sav`), sav);
         }
 
         const partners = t.roles.filter(r => r.kind === 'scripted').map(r => ({ username: r.username, policy: r.policy, partner: llms[0]!.username, params: r.params ?? {} }));
         writeFileSync(join(env, 'partners.json'), JSON.stringify(partners, null, 2));
-        writeFileSync(join(env, 'Dockerfile'), dockerfile(t));
+        writeFileSync(join(env, 'Dockerfile'), dockerfile(t) + (returning ? '\nCOPY continuity.json /qb/continuity.json\nRUN chmod 600 /qb/continuity.json\n' : ''));
+        if (returning) writeFileSync(join(env, 'continuity.json'), JSON.stringify(returning.lineage, null, 2));
         writeFileSync(join(env, 'scenario.json'), JSON.stringify(t, null, 2));
         writeFileSync(join(tests, 'test.sh'), testSh(t));
         await bundleVerifier(t.scenario.verifier, tests);

@@ -1,5 +1,7 @@
 import ObjType from '#/cache/config/ObjType.js';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync, renameSync, mkdtempSync, rmSync } from 'node:fs';
+import InvType from '#/cache/config/InvType.js';
+import { captureCheckpoint } from './Checkpoint.js';
 import { timingSafeEqual } from 'node:crypto';
 import { labState, labPlayer, changePlayer, LabError } from './Lab.js';
 import { logEvent } from './EventLog.js';
@@ -35,6 +37,18 @@ export async function controlResponse(world: any, req: Request, url: URL): Promi
         const text = await req.text();
         if (text.length > 10_000) throw new LabError('Request too large');
         const input = JSON.parse(text);
+        if (input.action === 'checkpoint') {
+            const snapshot = captureCheckpoint(world, input.players, id => InvType.get(id)?.scope === InvType.SCOPE_TEMP);
+            const dir = '/logs/tracking/final-checkpoint';
+            const temp = mkdtempSync('/logs/tracking/.checkpoint-');
+            try {
+                for (const player of snapshot.players) writeFileSync(`${temp}/end.${player.username}.sav`, player.data, { mode: 0o600 });
+                const metadata = { valid: true, tick: snapshot.tick, recoveredTemporaryItems: snapshot.recoveredTemporaryItems, at: new Date().toISOString(), players: snapshot.players.map(({ username, sha256 }) => ({ username, sha256 })) };
+                writeFileSync(`${temp}/checkpoint.json`, JSON.stringify(metadata), { mode: 0o600 });
+                renameSync(temp, dir); // publish the complete group atomically
+                return Response.json(metadata);
+            } finally { rmSync(temp, { recursive: true, force: true }); }
+        }
         if (input.action === 'move' && input.position && Number.isInteger(input.position.x) && Number.isInteger(input.position.z) && Number.isInteger(input.position.level)) {
             const p = input.position;
             if (!isZoneAllocated(p.x, p.z, p.level) || isFlagged(p.x, p.z, p.level, CollisionFlag.WALK_BLOCKED)) throw new LabError('Destination is blocked or outside the loaded world');

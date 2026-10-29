@@ -110,6 +110,21 @@ describe('dump-reasoning', () => {
 });
 
 describe('studio live operations', () => {
+    test('browser operator route cannot publish a runtime final checkpoint', async () => {
+        const { spyOn } = await import('bun:test');
+        const old = process.env.QB_STUDIO_MOCK; delete process.env.QB_STUDIO_MOCK;
+        const calls: string[][] = [];
+        const spawn = spyOn(Bun, 'spawn').mockImplementation(((cmd: string[]) => {
+            calls.push(cmd);
+            return { stdout: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('a0-test__trial\n')); c.close(); } }), exited: Promise.resolve(0) };
+        }) as any);
+        try {
+            const { handle } = await import(`../studio/server.ts?checkpoint-guard=${Date.now()}`);
+            const response = await handle(new Request('http://localhost/api/operator/player?player=agent', { method: 'POST', headers: { origin: 'http://localhost', 'content-type': 'application/json' }, body: JSON.stringify({ action: 'checkpoint', username: 'agent', container: 'a0-test__trial', players: ['agent'] }) }));
+            expect(response.status).toBe(400);
+            expect(calls.some(cmd => cmd[1] === 'exec')).toBe(false);
+        } finally { spawn.mockRestore(); if (old !== undefined) process.env.QB_STUDIO_MOCK = old; }
+    });
     test('slow snapshots and screenshots stay shared until settling, then cache for 1.5s', async () => {
         const { spyOn } = await import('bun:test');
         const originalMock = process.env.QB_STUDIO_MOCK;

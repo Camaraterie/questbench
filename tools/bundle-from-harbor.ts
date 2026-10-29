@@ -73,6 +73,7 @@ export function bundleTrial(trialDir: string, jobDir: string, opts: BundleOption
     const result = existsSync(join(trialDir, 'result.json')) ? JSON.parse(readFileSync(join(trialDir, 'result.json'), 'utf8')) : {};
     const agentCfg = config?.agents?.[0] ?? {};
     const taskDir = join(opts.tasksDir, slug);
+    const imageDigest = opts.imageDigest ?? (/^sha256:[a-f0-9]{64}$/.test(env.QB_IMAGE_DIGEST ?? '') ? env.QB_IMAGE_DIGEST : undefined);
 
     const runId = randomUUID();
     const dir = join(opts.out, `run-${runId}`);
@@ -82,18 +83,18 @@ export function bundleTrial(trialDir: string, jobDir: string, opts: BundleOption
         schema: 'questbench.run/v0',
         runId,
         task: { slug, harborDigest: existsSync(taskDir) ? dirDigest(taskDir) : `sha256:${'0'.repeat(64)}` },
-        image: { ref: env.QB_IMAGE ?? 'questbench', digest: opts.imageDigest ?? `sha256:${'0'.repeat(64)}` },
+        image: { ref: env.QB_IMAGE ?? 'questbench', digest: imageDigest ?? `sha256:${'0'.repeat(64)}` },
         rsSdkCommit: existsSync(join(qb, 'rs-sdk-commit.txt')) ? readFileSync(join(qb, 'rs-sdk-commit.txt'), 'utf8').trim() : 'unknown',
         seed: Number(env.QB_SEED ?? 0),
         tickRateMs: Number(env.NODE_TICKRATE ?? 50),
-        model: { id: agentCfg.model_name ?? 'unknown', provider: String(agentCfg.model_name ?? '').split('/')[0] || 'unknown', harness: agentCfg.name ?? 'unknown' },
+        model: { id: agentCfg.model_name ?? 'unknown', provider: String(agentCfg.model_name ?? '').split('/')[0] || 'unknown', harness: agentCfg.name ?? agentCfg.import_path ?? 'unknown' },
         startedAt: existsSync(join(qb, 'qb_start.txt')) ? readFileSync(join(qb, 'qb_start.txt'), 'utf8').trim() : '',
         endedAt: existsSync(join(qb, 'qb_end.txt')) ? readFileSync(join(qb, 'qb_end.txt'), 'utf8').trim() : '',
         contributor: { handle: opts.handle, licence: opts.licence },
         conditions: { aids: env.QB_AIDS === '1', durationSecs: Number(env.QB_DURATION_SECS ?? 0), exploratory: env.QB_EXPLORATORY === '1',
             intervened: existsSync(join(qb, 'interventions.jsonl')) && readFileSync(join(qb, 'interventions.jsonl'), 'utf8').trim().length > 0 },
         usage: result?.agent_result ? { inputTokens: result.agent_result.n_input_tokens ?? 0, outputTokens: result.agent_result.n_output_tokens ?? 0, cacheTokens: result.agent_result.n_cache_tokens ?? 0, costUsd: result.agent_result.cost_usd ?? null } : undefined,
-        provenance: { imageDigestKnown: !!opts.imageDigest, taskDigestFromLocalTasksDir: existsSync(taskDir) },
+        provenance: { imageDigestKnown: !!imageDigest, imageDigestKind: opts.imageDigest ? 'explicit' : env.QB_IMAGE_DIGEST_KIND ?? 'unknown', taskDigestFromLocalTasksDir: existsSync(taskDir) },
         // Pair tier: who played each seat (docker/seats/launch.ts logs "starting seat <bot> as <user> (<model>)").
         seats: pairSeats(qb),
     };
@@ -101,7 +102,7 @@ export function bundleTrial(trialDir: string, jobDir: string, opts: BundleOption
     writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
     if (existsSync(join(qb, 'events.jsonl'))) cpSync(join(qb, 'events.jsonl'), join(dir, 'events.jsonl')); else writeFileSync(join(dir, 'events.jsonl'), '');
     cpSync(join(qb, 'saves'), join(dir, 'saves'), { recursive: true });
-    for (const extra of ['partners', 'board.jsonl', 'trade_ledger.jsonl', 'WARNINGS.txt', 'reports.jsonl', 'agent-reasoning.jsonl', 'seats', 'interventions.jsonl', 'scenario.json']) if (existsSync(join(qb, extra))) cpSync(join(qb, extra), join(dir, extra), { recursive: true });
+    for (const extra of ['partners', 'board.jsonl', 'trade_ledger.jsonl', 'WARNINGS.txt', 'reports.jsonl', 'agent-reasoning.jsonl', 'seats', 'interventions.jsonl', 'scenario.json', 'continuity.json', 'checkpoint.json']) if (existsSync(join(qb, extra))) cpSync(join(qb, extra), join(dir, extra), { recursive: true });
     if (existsSync(join(trialDir, 'verifier', 'reward.json'))) cpSync(join(trialDir, 'verifier', 'reward.json'), join(dir, 'verdict.json'));
     // Pair tier: the per-seat detail lives beside reward.json (Harbor only accepts numbers in it).
     if (existsSync(join(trialDir, 'verifier', 'duo.json'))) writeFileSync(join(dir, 'verdict.json'), readFileSync(join(trialDir, 'verifier', 'duo.json'), 'utf8'));
@@ -112,6 +113,13 @@ export function bundleTrial(trialDir: string, jobDir: string, opts: BundleOption
     // Redact every text file except the hash-chained event log (editing it would break the chain;
     // it only holds in-game text, which the server already filtered) and the manifest.
     const hits: Record<string, number> = {};
+    const journalHashes: Record<string, string> = {};
+    for (const seat of manifest.seats as Array<{username: string}> ?? []) {
+        if (!/^[a-z][a-z0-9_]{0,11}$/.test(seat.username)) continue;
+        const path = `seats/${seat.username}/notes/JOURNAL.md`;
+        if (existsSync(join(dir, path))) journalHashes[path] = createHash('sha256').update(readFileSync(join(dir, path))).digest('hex');
+    }
+    writeFileSync(join(dir, 'journal-integrity.json'), JSON.stringify(journalHashes, null, 2));
     for (const f of walk(dir)) {
         if (!TEXT_EXT.test(f) || f.endsWith('events.jsonl') || f.endsWith('manifest.json')) continue;
         const r = redact(readFileSync(f, 'utf8'));

@@ -14,6 +14,8 @@ RUN bun /qb/engine/apply-patch.ts /app \
     && grep -q "QB-EVENTLOG" /app/server/engine/src/engine/script/handlers/InvOps.ts \
     && grep -q "QB-EVENTLOG" /app/server/engine/src/network/game/client/handler/MessagePrivateHandler.ts
 RUN bun /qb/engine/sdk-patch.ts /app
+RUN bun /qb/engine/feedback-patch.ts /app
+RUN cd /app/server/webclient && BUILD_MODE=bot bun run bundle.ts
 ENV EVENT_LOG_FILE=/logs/tracking/events.jsonl
 ENV QB_OBSERVER=1
 ENV QB_STUDIO_CONTROL=1
@@ -34,6 +36,8 @@ COPY aids /qb/aids
 COPY docker/qb-entrypoint.sh /qb-entrypoint.sh
 COPY docker/collect-artifacts.sh /qb/collect-artifacts.sh
 COPY docker/collect-notes.ts /qb/collect-notes.ts
+COPY docker/checkpoint.ts /qb/checkpoint.ts
+COPY docker/isolate-aids.sh /qb/isolate-aids.sh
 COPY docker/check-run.ts /qb/check-run.ts
 COPY docker/dump-reasoning.ts /qb/dump-reasoning.ts
 

@@ -2,6 +2,39 @@ import { expect, test } from 'bun:test';
 import { rewardMetrics, scoreDuo } from '../verifiers/check_duo';
 import { seatConfig, seatPrompt } from '../docker/seats/launch';
 import { resolveTasks } from '../src/scenarios';
+import { resolve } from 'node:path';
+
+test('adapter rejects failed launcher status rather than reporting a completed trial', () => {
+    const script = `
+import sys, types, asyncio, logging
+from types import SimpleNamespace
+for name in ['harbor', 'harbor.agents', 'harbor.agents.base']:
+    sys.modules[name] = types.ModuleType(name)
+sys.modules['harbor.agents.base'].BaseAgent = object
+sys.path.insert(0, ${JSON.stringify(resolve('agents'))})
+from qb_seats import QbSeats
+class Env:
+    def __init__(self,status): self.status=status
+    async def exec(self,command,**kwargs):
+        output = '1' if command.startswith('echo') else self.status if command.startswith('test -f') else ''
+        return SimpleNamespace(return_code=0,stdout=output)
+async def check(status):
+    agent=object.__new__(QbSeats); agent.logger=logging.getLogger('fixture'); agent.poll_sec=0
+    agent.models_json=lambda:'{}'
+    async def usage(*args): pass
+    agent._usage=usage
+    try:
+        await agent.run(None,Env(status),None)
+        return False
+    except RuntimeError: return True
+assert not asyncio.run(check('0 0'))
+for status in ['error', '', '1 0']: assert asyncio.run(check(status))
+print('ok')
+`;
+    const result = Bun.spawnSync(['python3', '-c', script], { stdout: 'pipe', stderr: 'pipe' });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString().trim()).toBe('ok');
+});
 
 test('both duo variants start adjacent in Lumbridge and tell each seat the partner is nearby', () => {
     for (const task of resolveTasks().filter(t => t.scenario.id === 'a0-duo')) {
