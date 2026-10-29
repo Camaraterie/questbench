@@ -19,7 +19,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 
-AGENT="claude-code"; MODEL=""; IMPORT_PATH=""; RB=""; TRIALS=1; DUO=0; SEAT_MODELS=""; SCENARIO_FILE=""
+AGENT="claude-code"; MODEL=""; IMPORT_PATH=""; RB=""; TRIALS=1; DUO=0; SEAT_MODELS=""; SCENARIO_FILE=""; RESUME_BUNDLE=""
 FILTER="a0-rendezvous-punctual-bare-15m"; ENV="docker"; HANDLE="${QB_HANDLE:-anonymous}"; BUILD_LOCAL=0; PUBLISH=1
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -36,6 +36,7 @@ while [ $# -gt 0 ]; do
     --duo) DUO=1; shift ;;
     --seat-models) SEAT_MODELS="$2"; shift 2 ;;
     --scenario-file) SCENARIO_FILE="$2"; shift 2 ;;
+    --resume-bundle) RESUME_BUNDLE="$2"; shift 2 ;;
     --build-local) BUILD_LOCAL=1; shift ;;
     --no-publish) PUBLISH=0; shift ;;
     --skip-build) shift ;;   # accepted for compatibility; the published image is the default now
@@ -48,6 +49,7 @@ if [ "$DUO" = "1" ]; then
   IMPORT_PATH="qb_seats:QbSeats"; MODEL="${MODEL:-zai-coding-plan/glm-5.3}"
   [[ "$FILTER" == a0-duo* || "$FILTER" == a0-workshop* || "$FILTER" == a0-lab* ]] || FILTER="a0-duo-open-15m"
   [ -n "$SCENARIO_FILE" ] && FILTER="a0-lab"
+  [ -n "$RESUME_BUNDLE" ] && FILTER="a0-return"
 fi
 
 # ── Preflight: fail fast with a fix, before generating anything ──
@@ -90,6 +92,7 @@ fi
 # ── Generate, run, bundle ──
 GEN_ARGS=(--only "$FILTER")
 [ -n "$SCENARIO_FILE" ] && GEN_ARGS+=(--scenario-file "$SCENARIO_FILE")
+[ -n "$RESUME_BUNDLE" ] && GEN_ARGS+=(--resume-bundle "$RESUME_BUNDLE")
 bun generate-tasks.ts "${GEN_ARGS[@]}"
 STAMP=$(date +%Y%m%d-%H%M%S)
 mkdir -p bundles results

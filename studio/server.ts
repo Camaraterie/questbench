@@ -205,11 +205,12 @@ function preflight() {
 let launch: { proc: ReturnType<typeof Bun.spawn> | null; log: string; startedAt: string | null; args: string[] } = { proc: null, log: '', startedAt: null, args: [] };
 const MODEL_RE = /^[\w.-]+\/[\w.:-]+$/;
 let startingLaunch = false;
-async function startLaunch(body: { variant?: string; scenario?: string; customId?: string; all?: boolean; trials?: number; publish?: boolean; duo?: boolean; seatModels?: Record<string, string> }) {
+async function startLaunch(body: { variant?: string; scenario?: string; customId?: string; resumeRunId?: string; all?: boolean; trials?: number; publish?: boolean; duo?: boolean; seatModels?: Record<string, string> }) {
     if (startingLaunch || (launch.proc && launch.proc.exitCode === null)) return { ok: false, error: 'A run is already in progress' };
     startingLaunch = true;
     try {
     if (body.scenario === 'lab' && !body.customId) return { ok: false, error: 'Save the custom scenario before launching it' };
+    if (body.resumeRunId && (!body.duo || !/^[a-f0-9-]{36}$/.test(body.resumeRunId) || body.customId || body.scenario || (body.trials ?? 1) !== 1)) return { ok: false, error: 'Character return requires one duo trial and a valid local run ID' };
     // Disposable viewer previews must not compete with a scored trial for CPU. Only touch
     // containers explicitly labeled as our preview, never arbitrary running experiments.
     const previews = await run(['docker', 'ps', '-q', '--filter', 'label=questbench.observer-preview=1']);
@@ -222,7 +223,11 @@ async function startLaunch(body: { variant?: string; scenario?: string; customId
         ? ['./scripts/run-pilot.sh', '--duo', '-k', trials]
         : ['./scripts/run-pilot.sh', '--glm', '--runebench', '../RuneBench', '-k', trials];
     if (body.duo) {
-        if (body.customId) {
+        if (body.resumeRunId) {
+            const bundle = join(ROOT, 'bundles', 'run-' + body.resumeRunId);
+            if (!existsSync(join(bundle, 'manifest.json'))) return { ok: false, error: 'Local source bundle not found' };
+            args.push('--resume-bundle', bundle);
+        } else if (body.customId) {
             if (!/^a0-lab-[a-f0-9]{12}$/.test(body.customId) || !existsSync(join(SCENARIO_DIR, body.customId + '.json'))) return { ok: false, error: 'Save the custom scenario first' };
             args.push('--scenario-file', join(SCENARIO_DIR, body.customId + '.json'));
         } else if (body.scenario === 'workshop-requisition' || body.scenario === 'workshop-livelihood') args.push('-t', `a0-workshop-${body.scenario.slice('workshop-'.length)}-20m`);
