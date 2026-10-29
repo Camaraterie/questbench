@@ -1,71 +1,66 @@
-# Live observation: Palanti integration
+# Live world observer
 
-The desired Studio game view is a live observer: independent player-follow cameras, a camera wall,
-free pan/zoom, and an overview of both seats. The existing screenshot is a view of the agent's client;
-it cannot provide those capabilities.
+Studio includes two independent 3D cameras built from Palanti's rs-world integration. Each camera
+can follow either trial player or explore freely. Controls include top view, roof cutaway and
+fullscreen. The existing agent-client screenshot remains available as a collapsed fallback.
 
-## Reference inspected
+## Build and run
 
-[palanti-rs-sdk](https://git.cafe/rs-sdk/palanti-rs-sdk), main at
-`301e70a9d1e0a491f11bfd6d2e4f3b00dd91d9a1` (2026-10-28).
+Use WSL on Windows. The renderer build puts dependencies on the Linux filesystem for performance
+and copies the generated files to ignored vendor/viewer-build. It downloads the revision-289 game
+cache into ignored vendor/viewer-cache; those files are served locally at runtime.
 
-- `server/world.ts` decodes a world feed: roster, entity positions/appearances, NPCs and signals.
-- `server/index.ts` relays a shared observation area to `/viewer-feed` WebSocket clients.
-- `server/viewer-bootstrap.ts` initializes newly opened cameras from current state without replaying
-  historical one-shot animations.
-- `scripts/build-viewer.sh` builds a pinned `MaxBittker/rs-world` renderer plus Palanti's viewer patch.
-- The renderer supports player-follow and area cameras. A single shared detailed observation area
-  limits simultaneous coverage of far-apart cameras; separate camera panes do not remove that limit.
+```sh
+bun run viewer:build
+./docker/build.sh questbench:observer
+QB_IMAGE=questbench:observer bun run studio
+```
 
-The reference currently hardcodes a public-demo world feed. It was inspected as source only, not
-started. QuestBench must never connect a trial or observer to that public server. The current v71
-benchmark image has no worldfeed implementation, so changing a URL alone is insufficient.
+Open http://localhost:4747. For a workspace reached through a Docker Desktop bind-mount alias, set
+QB_STUDIO_ROOT to its original absolute path so sibling repositories resolve correctly.
 
-## Recommended boundary
+Store ZHIPU_API_KEY in the repository's gitignored .env.local. Studio reads it at startup, so restart
+Studio after changing the file. The value is passed to the trial launcher and never to the viewer.
 
-Keep QuestBench's trial launch, scores, event log and reasoning timelines. Add a narrow observer
-integration using Palanti's renderer/camera work, rather than importing its economy, assistant,
-mission execution and fleet-control systems. Start on a separate viewer branch after the PM/spawn
-fix is validated. A renderer adapter can initially live in QuestBench; a separate Palanti fork makes
-sense if its UI is retained broadly enough to benefit from tracking upstream.
+## How observation works
 
-1. Add a read-only worldfeed producer to the **local engine**, compatible with the inspected feed
-   protocol. Capture authoritative entity state; do not log in another player to observe.
-2. Relay it through Studio from the selected trial container. Invalidate connection/state when the
-   container changes, and show disconnected/stale status instead of stale positions as current.
-3. Build the pinned renderer locally and serve its assets through Studio. Make the relay the only
-   runtime feed destination; remove public feed/asset fallbacks. Keep model credentials out of it.
-4. Show a follow camera for each seat and an optional shared overview. Retain reasoning and server
-   events beside the views. Make the shared detail-coverage boundary visible.
-5. Bound observer work and drop slow frames/clients so watching cannot stall the engine. Compare
-   tick timing with the observer on and off before using it in scored runs.
+- The local engine exposes an opt-in GET /qb-observer endpoint (QB_OBSERVER=1 in the image). It reads
+  public entity positions, appearance and facing. It exposes no inventories, credentials or actions.
+- Studio keeps one docker-exec polling process for its camera panes. Requests to the engine remain
+  inside the selected local container; its game ports need not be published to the host.
+- Each pane subscribes to its own bounded detail rectangle, up to 384 tiles on each side. Both panes
+  get the full player roster. They can inspect different places independently.
+- Positions are sampled about four times per second, with visual interpolation between observations.
+  This is an observer view, not an exact reconstruction of every 50 ms game step. Stationary samples
+  do not enqueue walking; feed loss does not extrapolate movement; long teleports snap.
+- Studio resets entity state when the trial container changes and reports stale/disconnected feeds.
+  Slow viewers are dropped rather than blocking the engine. Four concurrent panes are supported.
+- A labeled disposable preview is stopped before a scored trial starts, so it does not compete for CPU.
 
-Preserve the app's MIT notices and the renderer's BSD-2-Clause notices as described in Palanti's
-`THIRD-PARTY-NOTICES.md`. Its game cache/art assets have separate provenance; the root software
-license does not itself grant redistribution of those assets.
+No additional game account logs in to watch. No gameplay action is available through the observer.
+There is no public-demo feed or runtime cache fallback. The optional 2D atlas falls back to the
+renderer's local terrain worker; a precomputed whole-world atlas is not bundled.
 
-## PM/spawn preflight
+## Provenance
 
-The deterministic smoke script boots an isolated local engine plus two lite clients. It checks
-multi-chunk PMs in both directions against sender output, movement out of both spawn tiles, and
-an actual 150-coin/five-bar trade with final inventory checks. It calls no model or publishing API.
+Palanti source: https://git.cafe/rs-sdk/palanti-rs-sdk at
+301e70a9d1e0a491f11bfd6d2e4f3b00dd91d9a1. Renderer: MaxBittker/rs-world at
+7e4c9f711ba2f5a1f8e354c6083b8a471530383b. The maintained Palanti patch and QuestBench adaptations
+are under studio/viewer; vendor is generated. See studio/viewer/NOTICE.md for credits and licenses.
+Palanti's economy, assistant and mission execution systems are not imported.
 
-From WSL, after building `questbench:pm-lumbridge`:
+## Deterministic preflight
+
+The no-LLM smoke script boots an isolated local engine and two lite clients. It checks multi-chunk
+PMs in both directions, movement from both adjacent Lumbridge spawn tiles, and a real
+150-coin/five-bar trade with final inventory assertions.
 
 ```sh
 docker run --rm --network none -e QB_SMOKE_CONTAINER=1 \
   -v "$PWD:/workspace/qb:ro" --entrypoint bun \
-  questbench:pm-lumbridge /workspace/qb/tools/smoke-duo.ts
+  questbench:observer /workspace/qb/tools/smoke-duo.ts
 ```
 
-Use a disposable container: the script writes scenario saves and starts local services. For a
-diagnostic failure, omit `--rm` and inspect `/tmp/qb-smoke-*.log` in the stopped container.
-
-Validated on 2026-10-28 with `questbench:pm-lumbridge`: both directions' PM chunks matched sender
-output, both players left and returned to their spawn tiles, and the 150-coin/five-bar trade
-completed with the expected inventories (container exit 0). No LLM trial was launched. Until a
-fixed image is published, explicitly select this local image for a retry:
-
-```sh
-QB_IMAGE=questbench:pm-lumbridge ./scripts/run-pilot.sh --duo --no-publish
-```
+A disposable visual preview additionally sets QB_SMOKE_HOLD_SECS=1800 and the Docker label
+questbench.observer-preview=1. The players walk short loops after the successful smoke check; no
+model runs. This is explicitly preview activity, never benchmark results.

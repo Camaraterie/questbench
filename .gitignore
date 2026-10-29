@@ -10,3 +10,5 @@ vendor/
 .env.local
 results/
 __pycache__/
+.playwright-cli/
+.qb-scenarios/

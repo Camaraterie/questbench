@@ -9,7 +9,7 @@ MARK=$(date +%s)
 
 pkill -f "partners/run-partner.ts"
 # Pair tier: stop both LLM seats (their OpenCode, MCP server and any scripts) before logouts.
-for u in seat1 seat2; do pkill -u "$u" 2>/dev/null; done
+for u in seat1 seat2 seat3 seat4; do pkill -u "$u" 2>/dev/null; done
 pkill -f "src/lite/runner.ts"          # partner clients disconnect -> logout -> save
 pkill -f "launch-bot.ts"; pkill -f chromium   # agent client disconnects -> logout -> save
 
@@ -53,6 +53,8 @@ try {
 REPORT_COPY
 cp /var/qb/inbox/*.jsonl "$OUT/partners/" 2>/dev/null
 cp /app/.rs-sdk-commit "$OUT/rs-sdk-commit.txt" 2>/dev/null
+cp /logs/tracking/interventions.jsonl "$OUT/interventions.jsonl" 2>/dev/null
+cp /qb/scenario.json "$OUT/scenario.json" 2>/dev/null
 # Reasoning text never reaches the harness's JSON log; export it from OpenCode's session database.
 bun /qb/dump-reasoning.ts > "$OUT/agent-reasoning.jsonl"
 # Pair tier: each seat's OpenCode log and reasoning, plus the launcher's log.
@@ -65,6 +67,7 @@ if [ -f /logs/seats/seats.json ]; then
     mkdir -p "$OUT/seats/$BOT"
     cp "/logs/seats/$BOT/opencode.txt" "$OUT/seats/$BOT/" 2>/dev/null
     bun /qb/dump-reasoning.ts "/home/$SEAT_USER/.local/share/opencode/opencode.db" > "$OUT/seats/$BOT/reasoning.jsonl"
+    bun /qb/collect-notes.ts "/seats/$BOT" "$OUT/seats/$BOT/notes"
   done
 fi
 env | grep -E '^(QB_|NODE_TICKRATE)' | sort > "$OUT/env.txt"

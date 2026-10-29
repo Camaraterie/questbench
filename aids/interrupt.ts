@@ -9,17 +9,18 @@
 export interface ChatSdk {
     waitForChat(opts: { from?: string; matching?: RegExp | string; timeout?: number }): Promise<{ text: string; sender: string } | null>;
 }
+type InterruptResult<T> = { interrupted: false; result: T } | { interrupted: true; message: { text: string; sender: string } };
 
 export async function untilMessage<T>(
     sdk: ChatSdk,
     work: (signal: AbortSignal) => Promise<T>,
     opts: { from?: string; matching?: RegExp | string; timeoutMs?: number } = {},
-): Promise<{ interrupted: false; result: T } | { interrupted: true; message: { text: string; sender: string } }> {
+): Promise<InterruptResult<T>> {
     const ctrl = new AbortController();
     const chat = sdk.waitForChat({ from: opts.from, matching: opts.matching, timeout: opts.timeoutMs ?? 24 * 3600_000 })
         .then(m => (m ? { interrupted: true as const, message: m } : null));
     const job = work(ctrl.signal).then(result => ({ interrupted: false as const, result }));
-    const first = await Promise.race([job, chat.then(r => r ?? job)]);
+    const first = await Promise.race([job, chat.then<InterruptResult<T>>(r => r ?? job)]);
     ctrl.abort();
     return first;
 }

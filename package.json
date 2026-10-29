@@ -12,7 +12,8 @@
     "verify-bundle": "bun ingest/verify-bundle.ts",
     "redact": "bun tools/redact-bundle.ts",
     "page": "python3 tools/build-page.py",
-    "studio": "bun studio/server.ts"
+    "studio": "bun studio/server.ts",
+    "viewer:build": "sh scripts/build-viewer.sh"
   },
   "devDependencies": {
     "@types/bun": "latest",

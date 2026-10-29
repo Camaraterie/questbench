@@ -68,7 +68,7 @@ bun run studio      # opens http://localhost:4747
 - **Runs:** every finished run with its outcome, game video, conversation and full timeline.
 - **Launch:** a setup check (Docker, Harbor, key, RuneBench) and a Run button. Put `ZHIPU_API_KEY=...` in a gitignored `.env.local` so launches don't need a terminal.
 
-Studio only reads what the container already writes and never logs into the game, so watching can't affect an experiment. Coding agents can use the same JSON API (see `AGENTS.md`).
+Watching is read-only. The separate operator inspector can edit player items and positions with an audited reason; edited runs are excluded from baseline results. Launch also supports distant cooperative puzzles, open-ended livelihood sessions and custom two-to-four-player scenarios. See [the scenario lab guide](docs/SCENARIO-LAB.md) for configuration, observation and intervention details. Coding agents can use the same JSON API (see `AGENTS.md`).
 
 ## Pipeline
 

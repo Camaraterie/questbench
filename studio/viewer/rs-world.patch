@@ -1,0 +1,2871 @@
+diff --git a/public/index.html b/public/index.html
+index 9058ead..cf086ab 100644
+--- a/public/index.html
++++ b/public/index.html
+@@ -4,7 +4,7 @@
+     <meta charset="utf-8" />
+     <!-- GitHub Pages can't send COOP/COEP headers; this service worker adds them so the viewer
+          gets SharedArrayBuffer. It does nothing where the host already sets them. -->
+-    <script src="%PUBLIC_URL%/coi-serviceworker.js"></script>
++
+     <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+     <meta name="viewport" content="width=device-width, initial-scale=1" />
+     <meta name="theme-color" content="#000000" />
+diff --git a/src/components/renderer/Renderer.ts b/src/components/renderer/Renderer.ts
+index 965bc35..644dfbf 100644
+--- a/src/components/renderer/Renderer.ts
++++ b/src/components/renderer/Renderer.ts
+@@ -34,6 +34,7 @@ export abstract class Renderer {
+         this.canvas.style.height = "100%";
+         this.canvas.style.touchAction = "none";
+         this.canvas.tabIndex = 0;
++        this.canvas.setAttribute("aria-label", "3D world camera. WASD to move, hold Shift for 10 times speed.");
+     }
+ 
+     abstract init(): Promise<void>;
+diff --git a/src/components/rs/minimap/MinimapContainer.tsx b/src/components/rs/minimap/MinimapContainer.tsx
+index a072fe2..2fa096a 100644
+--- a/src/components/rs/minimap/MinimapContainer.tsx
++++ b/src/components/rs/minimap/MinimapContainer.tsx
+@@ -96,7 +96,7 @@ export const MinimapContainer = memo(function MinimapContainer({
+                 onClick={onCompassClick}
+             />
+ 
+-            <div className="worldmap-icon" onClick={onWorldMapClick} />
++            <button type="button" aria-label="Open world map" className="worldmap-icon" onClick={onWorldMapClick} />
+         </div>
+     );
+ });
+diff --git a/src/components/rs/worldmap/AtlasLayers.ts b/src/components/rs/worldmap/AtlasLayers.ts
+new file mode 100644
+index 0000000..2700edb
+--- /dev/null
++++ b/src/components/rs/worldmap/AtlasLayers.ts
+@@ -0,0 +1,8 @@
++export type AtlasLayer = 'surface' | 'dungeons';
++export const atlasLayerFor = (y:number): AtlasLayer => y>=6400?'dungeons':'surface';
++export function layerPosition(layer:AtlasLayer, position:{x:number;y:number}) {
++    return {x:position.x,y:atlasLayerFor(position.y)===layer?position.y:position.y+(layer==='dungeons'?6400:-6400)};
++}
++export function layerTileVisible(layer:AtlasLayer|undefined,mapY:number):boolean {
++    return !layer || (mapY>=100)===(layer==='dungeons');
++}
+diff --git a/src/components/rs/worldmap/WorldMap.css b/src/components/rs/worldmap/WorldMap.css
+index 9456f14..4c6201b 100644
+--- a/src/components/rs/worldmap/WorldMap.css
++++ b/src/components/rs/worldmap/WorldMap.css
+@@ -98,3 +98,17 @@
+ .worldmap-marker:hover {
+     transform: scale(1.6);
+ }
++
++.worldmap-atlas-status { position:absolute; top:8px; left:8px; z-index:5; max-width:calc(100% - 70px); display:flex; align-items:center; flex-wrap:wrap; gap:6px; color:#c3d4f4; font:12px ui-sans-serif,system-ui,sans-serif; }
++.worldmap-atlas-status button,.worldmap-atlas-status>span { border:1px solid #ffffff30; border-radius:6px; background:#111923e8; padding:6px 9px; color:inherit; }
++.worldmap-atlas-status button { cursor:pointer; font:inherit; }
++.worldmap-atlas-status button:hover { background:#263b4e; }
++.worldmap-atlas-status button:focus-visible { outline:2px solid #6ee7a0; outline-offset:2px; }
++
++/* Zoom-aware markers leave terrain readable; cluster counts are actionable. */
++.worldmap-marker{padding:0;min-width:0;min-height:0;line-height:1;box-shadow:0 0 0 1px #10182070;outline-offset:3px}
++.worldmap-marker.worldmap-cluster{display:flex;align-items:center;justify-content:center;border-width:1px;font:600 11px ui-sans-serif,system-ui,sans-serif}
++.worldmap-marker:focus-visible{outline:2px solid #fff}.worldmap-marker:hover{transform:scale(1.2);z-index:4}
++.worldmap-atlas-status>span[hidden]{display:none}
++
++.worldmap-marker{display:flex;align-items:center;justify-content:center;box-shadow:none}.worldmap-cluster{box-shadow:0 1px 4px #0008}
+diff --git a/src/components/rs/worldmap/WorldMap.tsx b/src/components/rs/worldmap/WorldMap.tsx
+index ee166e8..7bc108a 100644
+--- a/src/components/rs/worldmap/WorldMap.tsx
++++ b/src/components/rs/worldmap/WorldMap.tsx
+@@ -1,20 +1,27 @@
++import {wheelIntent} from '../../../mapviewer/EmbeddedScroll';
++import {atlasMarkerGroups,atlasActivityView} from './AtlasMarkers';
++import {researchView,researchShapes,rosterFresh,detailFresh,type ResearchSource,type LayerSettings} from '../../../live/ResearchLayers';
++import {playerColor,playerVisible} from '../../../live/Allegiance';
+ import {
+     MouseEvent,
+     TouchEvent,
+     WheelEvent,
+     memo,
+     useCallback,
++    useEffect,
+     useLayoutEffect,
++    useMemo,
+     useRef,
+     useState,
+ } from "react";
+ import { SingleValue } from "react-select";
+-import { useElementSize } from "usehooks-ts";
+ 
+-import { getMapSquareId } from "../../../rs/map/MapFileIndex";
++import { AtlasArea, AtlasFrameState, atlasAreaView, visibleAtlasTiles } from "./WorldMapTiles";
++import { AtlasLayer, atlasLayerFor, layerPosition, layerTileVisible } from './AtlasLayers';
+ import { clamp } from "../../../util/MathUtil";
+ import { OsrsSelect } from "../select/OsrsSelect";
+ import "./WorldMap.css";
++import {multiCombatStrips} from '../../../live/MultiCombat';
+ import locationsImport from "./locations.json";
+ 
+ interface Location {
+@@ -57,18 +64,19 @@ interface Position {
+     y: number;
+ }
+ 
+-const TILE_SIZES = [0.25, 0.375, 0.5, 0.75, 1, 2, 3, 4, 5, 6, 8, 10];
++const TILE_SIZES = [0.0625, 0.125, 0.25, 0.375, 0.5, 0.75, 1, 2, 3, 4, 5, 6, 8, 10];
+ 
+ const DEFAULT_TILE_SIZE = 3;
+ 
+ const MAX_X = 100 * 64;
+ const MAX_Y = 200 * 64;
+ 
+-// TODO: Optimize by writing to 1 image
++// Reuse static terrain between tile arrivals; live markers update separately.
+ 
+ // A dot drawn on the map, e.g. a live player. x/y are tile coords.
+ export interface WorldMapMarker {
+     key: string;
++    plane?:number;
+     x: number;
+     y: number;
+     label: string;
+@@ -76,28 +84,57 @@ export interface WorldMapMarker {
+ }
+ 
+ export interface WorldMapProps {
++    pageScroll?:boolean;
++    initialActivityFocus?:boolean;
++    researchSource?:ResearchSource;
++    researchSettings?:LayerSettings;
++    researchColor?:(name:string)=>string;
++    interactionHint?: string;
++    multiCombat?: boolean;
++    combatPlane?: number;
++    layer?: AtlasLayer;
++    hideAreaButtons?: boolean;
+     onDoubleClick: (x: number, y: number) => void;
+ 
+     getPosition: () => Position;
+     loadMapImageUrl: (mapX: number, mapY: number) => string | undefined;
+ 
++    getAtlasAreas?: () => AtlasArea[];
+     getMarkers?: () => WorldMapMarker[];
+     onMarkerClick?: (marker: WorldMapMarker) => void;
+ }
+ 
+ export const WorldMap = memo(function WorldMap(props: WorldMapProps) {
+-    const { getPosition, loadMapImageUrl, getMarkers, onMarkerClick } = props;
++    const { getPosition, loadMapImageUrl, getMarkers, onMarkerClick, getAtlasAreas } = props;
+ 
+-    const [ref, { width = 0, height = 0 }] = useElementSize();
++    const [mapElement, setMapElement] = useState<HTMLDivElement | null>(null);
++    const [{width, height}, setViewport] = useState({width:0, height:0});
++    useLayoutEffect(() => {
++        if (!mapElement) return;
++        const measure = () => {
++            const width = mapElement.clientWidth, height = mapElement.clientHeight;
++            setViewport(old => old.width === width && old.height === height ? old : {width,height});
++        };
++        measure();
++        const observer = new ResizeObserver(measure);
++        observer.observe(mapElement);
++        return () => observer.disconnect();
++    }, [mapElement]);
++    const loadedTileUrls = useRef(new Set<string>());
++    const failedTileUrls = useRef(new Set<string>());
++    const [tileProgress, setTileProgress] = useState({loaded:0,total:0,failed:0,ready:false});
+     const dragRef = useRef<HTMLDivElement>(null);
+ 
+     const [isDragging, setIsDragging] = useState(false);
+     const [startPos, setStartPos] = useState<Position>({ x: 0, y: 0 });
+ 
+-    const [pos, setPos] = useState(getPosition);
++    const [pos, setPos] = useState(() => props.layer ? layerPosition(props.layer,getPosition()) : getPosition());
+     const [tileSizeIndex, setTileSizeIndex] = useState(TILE_SIZES.indexOf(DEFAULT_TILE_SIZE));
+ 
+     const [images, setImages] = useState<JSX.Element[]>([]);
++    const [researchElements,setResearchElements]=useState<JSX.Element[]>([]);
++    const [coverageText,setCoverageText]=useState('');
++    const researchAt=useRef(0);
+     const [markers, setMarkers] = useState<JSX.Element[]>([]);
+ 
+     const requestRef = useRef<number | undefined>();
+@@ -106,89 +143,91 @@ export const WorldMap = memo(function WorldMap(props: WorldMapProps) {
+ 
+     const cameraX = pos.x | 0;
+     const cameraY = pos.y | 0;
++    const minPanY = props.layer === 'dungeons' ? 6400 : 0;
++    const maxPanY = props.layer === 'surface' ? 6400 : MAX_Y;
+ 
+     const halfWidth = (width / 2) | 0;
+     const halfHeight = (height / 2) | 0;
+ 
++    const tiles = useMemo(() => visibleAtlasTiles(width, height, pos.x, pos.y, tileSize).filter(tile=>layerTileVisible(props.layer,tile.mapY)), [width, height, pos, tileSize, props.layer]);
++    const combatShapes = useMemo(()=>props.multiCombat===false?[]:multiCombatStrips.filter(zone=>zone.plane===(props.combatPlane??0) &&
++        (!props.layer||atlasLayerFor(zone.z)===props.layer) && zone.x+zone.width>=pos.x-width/(2*tileSize)&&zone.x<=pos.x+width/(2*tileSize)&&zone.z+8>=pos.y-height/(2*tileSize)&&zone.z<=pos.y+height/(2*tileSize)).map(zone=><rect key={`${zone.x}:${zone.z}`} x={halfWidth+(zone.x-cameraX)*tileSize} y={halfHeight-(zone.z+8-cameraY)*tileSize} width={zone.width*tileSize} height={8*tileSize}/>),[props.multiCombat,props.combatPlane,props.layer,pos,width,height,tileSize,cameraX,cameraY,halfWidth,halfHeight]);
++    const frameState = useRef(new AtlasFrameState());
++    const fitted = useRef(false);
++    const fitLayer = useCallback(() => {
++        const area=getAtlasAreas?.().find(area=>area.id===props.layer);
++        if(!area||!width||!height)return false;
++        const view=atlasAreaView(area,width,height,TILE_SIZES);
++        setPos({x:view.x,y:view.y});setTileSizeIndex(TILE_SIZES.indexOf(view.tileSize));return true;
++    },[getAtlasAreas,props.layer,width,height]);
++    const layerMarkers=()=> (getMarkers?.()??[]).filter(m=>(!props.layer||atlasLayerFor(m.y)===props.layer)&&(m.plane===undefined||m.plane===(props.combatPlane??0)));
++    const focusActivity=()=>{
++        const view=atlasActivityView(layerMarkers(),width,height,TILE_SIZES);
++        if(!view)return false;
++        setPos({x:view.x,y:view.y});setTileSizeIndex(TILE_SIZES.indexOf(view.tileSize));return true;
++    };
++    useEffect(()=>{
++        if(fitted.current||!props.layer||!tileProgress.ready)return;
++        fitted.current=props.initialActivityFocus?focusActivity():fitLayer();
++    },[fitLayer,props.layer,tileProgress.ready,props.initialActivityFocus,props.researchSource?.rosterAt]);
++
+     const animate = (time: DOMHighResTimeStamp) => {
+-        const halfTileSize = tileSize / 2;
+-        const imageSize = 64 * tileSize;
+-
+-        const mapX = pos.x >> 6;
+-        const mapY = pos.y >> 6;
+-
+-        const x = halfWidth - (cameraX % 64) * tileSize - halfTileSize;
+-        const y = halfHeight - (cameraY % 64) * tileSize - halfTileSize;
+-
+-        const renderStartX = -Math.ceil(x / imageSize) - 1;
+-        const renderStartY = -Math.ceil(y / imageSize) - 1;
+-
+-        const renderEndX = Math.ceil((width - x) / imageSize) + 1;
+-        const renderEndY = Math.ceil((height - y) / imageSize) + 1;
+-
+-        const images: JSX.Element[] = [];
+-
+-        for (let rx = renderStartX; rx < renderEndX; rx++) {
+-            for (let ry = renderStartY; ry < renderEndY; ry++) {
+-                const imageMapX = mapX + rx;
+-                const imageMapY = mapY + ry;
+-                const mapId = getMapSquareId(imageMapX, imageMapY);
+-                const mapUrl = loadMapImageUrl(imageMapX, imageMapY);
+-                if (mapUrl) {
+-                    images.push(
+-                        <img
+-                            key={mapId}
+-                            className={`worldmap-image ${imageMapX}_${imageMapY}`}
+-                            src={mapUrl}
+-                            style={{
+-                                left: x + rx * imageSize,
+-                                bottom: y + ry * imageSize,
+-                                width: imageSize,
+-                                height: imageSize,
+-                            }}
+-                        />,
+-                    );
+-                }
+-            }
++        // Keep requesting missing tiles every frame so the existing bounded worker
++        // queue stays busy, but avoid rebuilding unchanged terrain in React.
++        const urls = tiles.map(tile => loadMapImageUrl(tile.mapX, tile.mapY));
++        if (frameState.current.terrainChanged(urls)) {
++            setImages(tiles.flatMap((tile, i) => urls[i] ? [
++                <img
++                    key={tile.id}
++                    alt=""
++                    className={`worldmap-image ${tile.mapX}_${tile.mapY}`}
++                    src={urls[i]}
++                    onLoad={() => { loadedTileUrls.current.add(urls[i]!); failedTileUrls.current.delete(urls[i]!); }}
++                    onError={() => { failedTileUrls.current.add(urls[i]!); }}
++                    style={{left: tile.left, bottom: tile.bottom, width: tile.size, height: tile.size}}
++                />,
++            ] : []));
+         }
+ 
+-        setImages(images);
+-
+-        if (getMarkers) {
++        if(time-researchAt.current>1000) {
++            researchAt.current=time;
++            const source=props.researchSource??researchView.source,settings=props.researchSettings??researchView.settings;
++            const minZ=props.layer==='dungeons'?6400:0,maxZ=props.layer==='surface'?6400:MAX_Y;
++            const shapes=researchShapes(source,settings,props.combatPlane??0,{minX:pos.x-width/(2*tileSize),maxX:pos.x+width/(2*tileSize),minZ:Math.max(minZ,pos.y-height/(2*tileSize)),maxZ:Math.min(maxZ,pos.y+height/(2*tileSize))},props.researchColor??playerColor,props.researchSource?()=>true:playerVisible);
++            setResearchElements(shapes.map((shape,i)=><polyline key={i} points={shape.points.map(([x,z])=>`${halfWidth+(x-cameraX)*tileSize},${halfHeight-(z-cameraY)*tileSize}`).join(' ')} fill={shape.fill?shape.color:'none'} stroke={shape.fill?'none':shape.color} opacity={shape.alpha} strokeWidth={shape.fill?0:2} strokeDasharray={shape.dashed?'3 4':undefined}/>));
++            setCoverageText(!source?'Research data pending':!rosterFresh(source)?'Stale roster · trails are historical':settings.coverage?(detailFresh(source)?'Cyan: shared detail area · outside: positions only':'Detail stale · positions only'):settings.presence||settings.trails?'Green friendlies · red others · dotted sampled movement':'');
++        }
++        if (frameState.current.markersDue(time)) {
++            const available = urls.filter((url): url is string => !!url);
++            const next = {total:available.length,loaded:available.filter(url=>loadedTileUrls.current.has(url)).length,
++                failed:available.filter(url=>failedTileUrls.current.has(url)).length,ready:(getAtlasAreas?.().length ?? 0)>0};
++            setTileProgress(old => old.total===next.total && old.loaded===next.loaded && old.failed===next.failed && old.ready===next.ready ? old : next);
++            if (getMarkers) {
+             const markerElements: JSX.Element[] = [];
+-            const dotSize = clamp(tileSize * 2, 7, 11);
+-            for (const marker of getMarkers()) {
+-                const left = halfWidth + (marker.x - cameraX) * tileSize;
+-                const bottom = halfHeight + (marker.y - cameraY) * tileSize;
+-                if (left < -10 || bottom < -10 || left > width + 10 || bottom > height + 10) {
+-                    continue;
+-                }
+-                markerElements.push(
+-                    <div
+-                        key={marker.key}
+-                        className="worldmap-marker"
+-                        title={marker.label}
+-                        onClick={() => onMarkerClick?.(marker)}
+-                        style={{
+-                            left: left - dotSize / 2,
+-                            bottom: bottom - dotSize / 2,
+-                            width: dotSize,
+-                            height: dotSize,
+-                            backgroundColor: marker.color,
+-                        }}
+-                    />,
+-                );
++            const dotSize = clamp(tileSize * 2, 3, 8);
++            for (const group of atlasMarkerGroups(layerMarkers(),tileSize)) {
++                const count=group.members.length,cluster=count>1;
++                const left=halfWidth+(group.x-cameraX)*tileSize,bottom=halfHeight+(group.y-cameraY)*tileSize;
++                if(left < -24 || bottom < -24 || left > width+24 || bottom > height+24)continue;
++                const size=cluster?Math.min(30,20+Math.log10(count)*4):20;
++                const label=cluster?`${count} players · zoom in to inspect`:group.members[0].label;
++                markerElements.push(<button type="button" key={group.key} className={`worldmap-marker ${cluster?'worldmap-cluster':''}`} aria-label={label} title={cluster?`${label}. ${group.members.slice(0,8).map(m=>m.label).join(', ')}${count>8?'…':''}`:label}
++                    onClick={()=>{if(cluster){setPos({x:group.x,y:group.y});setTileSizeIndex(i=>Math.min(i+2,TILE_SIZES.length-1));}else onMarkerClick?.(group.members[0]);}}
++                    style={{left:left-size/2,bottom:bottom-size/2,width:size,height:size,backgroundColor:cluster?'#1b2430':'transparent',borderColor:cluster?group.color:'transparent',color:group.color}}>{cluster?count:<span aria-hidden="true" style={{display:'block',width:dotSize,height:dotSize,background:group.color,borderRadius:'50%',border:'1px solid #101820',boxSizing:'border-box'}}/>}</button>);
+             }
+             setMarkers(markerElements);
++            }
+         }
+ 
+         requestRef.current = requestAnimationFrame(animate);
+     };
+ 
+     useLayoutEffect(() => {
++        frameState.current.reset();researchAt.current=-Infinity;
++        if(width<=0||height<=0)return;
+         requestRef.current = requestAnimationFrame(animate);
+         return () => cancelAnimationFrame(requestRef.current!);
+-    }, [width, height, pos, tileSize]);
++    }, [tiles, getMarkers, onMarkerClick, loadMapImageUrl, getAtlasAreas, width, height, props.layer, props.researchSource, props.researchSettings, props.researchColor, props.combatPlane]);
+ 
+     const onDoubleClick = (event: MouseEvent) => {
+         setIsDragging(false);
+@@ -239,7 +278,7 @@ export const WorldMap = memo(function WorldMap(props: WorldMapProps) {
+         setPos((pos) => {
+             return {
+                 x: clamp(pos.x + deltaX, 0, MAX_X),
+-                y: clamp(pos.y + deltaY, 0, MAX_Y),
++                y: clamp(pos.y + deltaY, minPanY, maxPanY),
+             };
+         });
+     };
+@@ -274,7 +313,25 @@ export const WorldMap = memo(function WorldMap(props: WorldMapProps) {
+         return TILE_SIZES[newIndex];
+     };
+ 
++    useEffect(()=>{
++        const node=dragRef.current;
++        const reserveWheel=(event:globalThis.WheelEvent)=>{if(event.ctrlKey||event.metaKey)return;if(((props.pageScroll||window.parent!==window)&&event.altKey)||window.parent!==window)event.preventDefault();};
++        node?.addEventListener('wheel',reserveWheel,{passive:false});
++        return()=>node?.removeEventListener('wheel',reserveWheel);
++    },[props.pageScroll]);
++    const lastWheelZoom=useRef(0);
+     const onMouseWheel = (event: WheelEvent) => {
++        const embedded=props.pageScroll===true||window.parent!==window;
++        const intent=wheelIntent(event,embedded);
++        if(intent.kind==='browser')return;
++        if(intent.kind==='scroll'){
++            if(window.parent!==window){event.preventDefault();window.parent.postMessage({type:'rs-watch-scroll',deltaX:intent.x,deltaY:intent.y},window.location.origin);}
++            return;
++        }
++        event.preventDefault();
++        event.stopPropagation();
++        if(embedded&&Date.now()-lastWheelZoom.current<100)return;
++        lastWheelZoom.current=Date.now();
+         const offsetX = event.nativeEvent.offsetX;
+         const offsetY = event.nativeEvent.offsetY;
+ 
+@@ -289,7 +346,7 @@ export const WorldMap = memo(function WorldMap(props: WorldMapProps) {
+         setPos((pos) => {
+             return {
+                 x: clamp(pos.x + deltaX - newDeltaX, 0, MAX_X),
+-                y: clamp(pos.y + deltaY - newDeltaY, 0, MAX_Y),
++                y: clamp(pos.y + deltaY - newDeltaY, minPanY, maxPanY),
+             };
+         });
+     };
+@@ -305,45 +362,33 @@ export const WorldMap = memo(function WorldMap(props: WorldMapProps) {
+     const onLocationSelected = useCallback((value: SingleValue<LocationOption>) => {
+         if (value) {
+             const location = locationsMap[value.value];
+-            setPos({
++            const position = {
+                 x: location.coords[0],
+                 y: location.coords[1],
+-            });
++            };
++            setPos(props.layer?layerPosition(props.layer,position):position);
+             setTileSizeIndex(TILE_SIZES.indexOf(getTileSize(location.size)));
+         }
+-    }, []);
+-
+-    const borderWidth = MAX_X * tileSize;
+-    const borderHeight = MAX_Y * tileSize;
+-
+-    const borderOffsetX = cameraX * tileSize;
+-    const borderOffsetY = cameraY * tileSize;
++    }, [props.layer]);
+ 
+     return (
+         <div className="worldmap-container">
+-            <div className="worldmap" ref={ref}>
++            <div className="worldmap" ref={setMapElement}>
++                <div className="worldmap-atlas-status">
++                    {props.layer && <><strong>{props.layer==='surface'?'Surface':'Dungeons'}</strong><button type="button" onClick={focusActivity} title="Focus the busiest observed player area">Activity</button><button type="button" onClick={fitLayer}>Overview</button></>}
++                    {!props.hideAreaButtons && (getAtlasAreas?.() ?? []).map(area => <button type="button" key={area.id} onClick={() => {
++                        const view = atlasAreaView(area, width, height, TILE_SIZES);
++                        setPos({x:view.x,y:view.y});
++                        setTileSizeIndex(TILE_SIZES.indexOf(view.tileSize));
++                    }}>{area.label}</button>)}
++                    <span role="status" hidden={tileProgress.ready&&!tileProgress.failed&&tileProgress.loaded===tileProgress.total} >{tileProgress.failed ? `${tileProgress.failed} tiles failed — refresh to retry` :
++                        tileProgress.total ? `${tileProgress.loaded}/${tileProgress.total} terrain tiles loaded` :
++                        tileProgress.ready ? "No terrain here · choose Surface or Dungeons" : "Preparing terrain…"}</span>
++                </div>
+                 {images}
+-                {/* <div className=""
+-                style={{
+-                    position: "absolute",
+-                    left: halfWidth - 2,
+-                    bottom: halfHeight - 2,
+-                    width: 4,
+-                    height: 4,
+-                    backgroundColor: "cyan",
+-                    // zIndex: 10,
+-                }}
+-            ></div> */}
+-                <div
+-                    className="worldmap-border"
+-                    style={{
+-                        position: "absolute",
+-                        left: halfWidth - borderOffsetX,
+-                        bottom: halfHeight - borderOffsetY,
+-                        width: borderWidth,
+-                        height: borderHeight,
+-                    }}
+-                ></div>
++                <svg aria-label={`Research overlays, floor ${props.combatPlane??0}`} width={width} height={height} style={{position:'absolute',inset:0,pointerEvents:'none'}}>{researchElements}</svg>
++                {coverageText&&<div className="research-map-legend" style={{position:'absolute',left:8,bottom:8,pointerEvents:'none',background:'#161a20da',color:'#dae4ef',padding:'4px 7px',fontSize:10,zIndex:2,maxWidth:'calc(100% - 16px)'}}>{coverageText}</div>}
++                {props.multiCombat!==false&&<svg aria-label={`Multi-combat areas, floor ${props.combatPlane??0}, local game source`} width={width} height={height} style={{position:'absolute',inset:0,pointerEvents:'none',fill:'rgba(255,197,61,.20)',stroke:'rgba(255,210,100,.65)',strokeWidth:.7}}>{combatShapes}</svg>}
+                 <div
+                     className={`worldmap-drag ${isDragging ? "dragging" : ""}`}
+                     onDoubleClick={onDoubleClick}
+@@ -355,7 +400,7 @@ export const WorldMap = memo(function WorldMap(props: WorldMapProps) {
+                     onTouchEnd={stopDragging}
+                     onWheel={onMouseWheel}
+                     onMouseLeave={stopDragging}
+-                    title="Double click to teleport"
++                    title={props.interactionHint??"Double click to move the spectator camera"}
+                     ref={dragRef}
+                 ></div>
+                 {markers}
+@@ -365,7 +410,7 @@ export const WorldMap = memo(function WorldMap(props: WorldMapProps) {
+                 <div className="worldmap-location-select">
+                     <OsrsSelect
+                         options={locationOptions}
+-                        onChange={onLocationSelected}
++                        onChange={value=>onLocationSelected(value as SingleValue<LocationOption>)}
+                     ></OsrsSelect>
+                 </div>
+                 <span className="worldmap-zoom-buttons flex align-right">
+diff --git a/src/components/rs/worldmap/WorldMapModal.css b/src/components/rs/worldmap/WorldMapModal.css
+index 6ac2a54..d3da52f 100644
+--- a/src/components/rs/worldmap/WorldMapModal.css
++++ b/src/components/rs/worldmap/WorldMapModal.css
+@@ -15,6 +15,8 @@
+     overflow: auto;
+     -webkit-overflow-scrolling: "touch";
+     outline: none;
++    display:flex;
++    flex-direction:column;
+ }
+ 
+ @media screen and (min-width: 480px) and (min-height: 300px) {
+@@ -42,3 +44,12 @@
+ .worldmap-close-button:hover {
+     background-image: url(./close-button-hover.png);
+ }
++
++.worldmap-view-bar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;flex-shrink:0;min-height:48px;padding:8px 45px 8px 12px;background:#162333;color:#d3e3fb;font:12px ui-sans-serif,system-ui,sans-serif;border-bottom:1px solid #5f7b9e66}
++.worldmap-view-bar>div{display:flex;gap:4px}.worldmap-view-bar button{cursor:pointer;border:1px solid #ffffff30;border-radius:6px;background:#1a2b40;color:inherit;padding:7px 10px;font:inherit}.worldmap-view-bar button[aria-pressed=true]{background:#37597e;border-color:#a3c8fb}.worldmap-view-bar>span{font-size:10px;color:#99aec9}.worldmap-panes{flex:1;min-height:0;display:flex}.worldmap-panes.dual-atlas{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px;background:#415775}.worldmap-panes>section{min-width:0;min-height:0;overflow:hidden;position:relative;background:black}.dual-atlas .worldmap-atlas-status{max-width:calc(100% - 16px)}.dual-atlas .worldmap-atlas-status strong{padding:6px 9px;background:#142437ee;border:1px solid #aecfff44;border-radius:6px}.dual-atlas .worldmap-location-select{min-width:0;flex:1}.dual-atlas .osrs-select-container{min-width:0!important;width:100%}.dual-atlas .worldmap-footer{flex-shrink:0}.dual-atlas .worldmap{min-height:0}.worldmap-view-bar button:focus-visible{outline:2px solid #b1d1ff;outline-offset:2px}
++@media(max-width:800px){.worldmap-panes.dual-atlas{grid-template-columns:minmax(0,1fr);grid-template-rows:repeat(2,minmax(0,1fr))}.worldmap-view-bar{gap:8px}.worldmap-view-bar>span{display:none}.worldmap-atlas-status{font-size:10px}.dual-atlas .worldmap-atlas-status>span{font-size:9px}}
++.worldmap-view-bar button[title][aria-pressed=true]{color:var(--amber-11,#ffd264)}
++.worldmap-view-bar select{background:var(--gray-3,#202631);color:var(--gray-12,#eee);min-height:32px}
++
++.worldmap-view-bar>div{flex-wrap:wrap;align-items:center}
++@media(max-width:700px){.worldmap-view-bar button,.worldmap-view-bar select{min-height:44px}}
+diff --git a/src/components/rs/worldmap/WorldMapModal.tsx b/src/components/rs/worldmap/WorldMapModal.tsx
+index 1e02ddf..a85a2e3 100644
+--- a/src/components/rs/worldmap/WorldMapModal.tsx
++++ b/src/components/rs/worldmap/WorldMapModal.tsx
+@@ -1,4 +1,6 @@
+ import Modal from "react-modal";
++import {readAtlasCombat,writeAtlasCombat,subscribeAtlasCombat} from '../../../live/AtlasCombatPreference';
++import { useEffect, useState } from 'react';
+ 
+ import { WorldMap, WorldMapProps } from "./WorldMap";
+ import "./WorldMapModal.css";
+@@ -15,15 +17,31 @@ Modal.setAppElement("#root");
+ 
+ export function WorldMapModal(props: Props) {
+     const { isOpen, onRequestClose } = props;
++    const [combat,setCombat]=useState(()=>readAtlasCombat());
++    useEffect(()=>{const unsubscribe=subscribeAtlasCombat(setCombat);setCombat(readAtlasCombat());return unsubscribe;},[]);
++    const [combatPlane,setCombatPlane]=useState(0);
++    const [dual,setDual]=useState(()=>{try{return localStorage.getItem('rs-watch:dual-atlas')==='true';}catch{return false;}});
+     return (
+         <Modal
+             className="worldmap-modal rs-border"
+             overlayClassName="worldmap-modal-overlay"
++            contentLabel="World terrain atlas"
+             isOpen={isOpen}
+             onRequestClose={onRequestClose}
+         >
+-            <div className="worldmap-close-button" onClick={onRequestClose}></div>
+-            <WorldMap {...props} />
++            <button type="button" aria-label="Close world map" className="worldmap-close-button" onClick={onRequestClose} />
++            <div className="worldmap-view-bar"><strong>World map</strong><div role="group" aria-label="World map layout">
++                <button type="button" aria-pressed={!dual} onClick={()=>{setDual(false);try{localStorage.setItem('rs-watch:dual-atlas','false');}catch{}}}>Single map</button>
++                <button type="button" aria-pressed={dual} onClick={()=>{setDual(true);try{localStorage.setItem('rs-watch:dual-atlas','true');}catch{}}}>Surface + Dungeons</button>
++                <button type="button" aria-pressed={combat} title="Local game-source boundaries; live server revision unverified" onClick={()=>writeAtlasCombat(!combat)}>Multi-combat zones</button>
++                {<label>Floor <select aria-label="Multi-combat map floor" value={combatPlane} onChange={e=>setCombatPlane(Number(e.target.value))}>{[0,1,2,3].map(p=><option key={p} value={p}>{p}</option>)}</select></label>}
++            </div><span>Drag to pan · scroll to zoom · double-click to fly</span></div>
++            <div className={`worldmap-panes ${dual?'dual-atlas':''}`}>
++                {dual ? <>
++                    <section aria-label="Surface map"><WorldMap {...props} multiCombat={combat} combatPlane={combatPlane} layer="surface" hideAreaButtons /></section>
++                    <section aria-label="Dungeon map"><WorldMap {...props} multiCombat={combat} combatPlane={combatPlane} layer="dungeons" hideAreaButtons /></section>
++                </> : <WorldMap {...props} multiCombat={combat} combatPlane={combatPlane} />}
++            </div>
+         </Modal>
+     );
+ }
+diff --git a/src/components/rs/worldmap/WorldMapTiles.ts b/src/components/rs/worldmap/WorldMapTiles.ts
+new file mode 100644
+index 0000000..6fa4a79
+--- /dev/null
++++ b/src/components/rs/worldmap/WorldMapTiles.ts
+@@ -0,0 +1,60 @@
++export interface AtlasTile {
++    id: number;
++    mapX: number;
++    mapY: number;
++    left: number;
++    bottom: number;
++    size: number;
++}
++
++// One viewport calculation, reused while asynchronous tile generation finishes.
++export function visibleAtlasTiles(width: number, height: number, posX: number, posY: number, tileSize: number): AtlasTile[] {
++    if (width <= 0 || height <= 0 || tileSize <= 0) return [];
++    const halfWidth = (width / 2) | 0, halfHeight = (height / 2) | 0;
++    const size = 64 * tileSize;
++    const x = halfWidth - ((posX | 0) % 64) * tileSize - tileSize / 2;
++    const y = halfHeight - ((posY | 0) % 64) * tileSize - tileSize / 2;
++    const startX = -Math.ceil(x / size) - 1, startY = -Math.ceil(y / size) - 1;
++    const endX = Math.ceil((width - x) / size) + 1, endY = Math.ceil((height - y) / size) + 1;
++    const tiles: AtlasTile[] = [];
++    for (let rx = startX; rx < endX; rx++) {
++        for (let ry = startY; ry < endY; ry++) {
++            const mapX = (posX >> 6) + rx, mapY = (posY >> 6) + ry;
++            if (mapX < 0 || mapY < 0 || mapX >= 100 || mapY >= 200) continue;
++            tiles.push({id: (mapX << 8) + mapY, mapX, mapY, left: x + rx * size, bottom: y + ry * size, size});
++        }
++    }
++    const distance = (t: AtlasTile) => (t.left + size / 2 - halfWidth) ** 2 + (t.bottom + size / 2 - halfHeight) ** 2;
++    return tiles.sort((a, b) => distance(a) - distance(b));
++}
++
++// Terrain is static between arriving tiles; player dots need only 10 updates/sec.
++export class AtlasFrameState {
++    private urls: readonly (string | undefined)[] | undefined;
++    private lastMarkersAt = -Infinity;
++    reset(): void { this.urls = undefined; this.lastMarkersAt = -Infinity; }
++    terrainChanged(urls: readonly (string | undefined)[]): boolean {
++        if (this.urls && this.urls.length === urls.length && urls.every((url, i) => url === this.urls![i])) return false;
++        this.urls = urls;
++        return true;
++    }
++    markersDue(time: number): boolean {
++        if (time - this.lastMarkersAt < 100) return false;
++        this.lastMarkersAt = time;
++        return true;
++    }
++}
++
++export interface AtlasArea {
++    id: string;
++    label: string;
++    minX: number;
++    maxX: number;
++    minY: number;
++    maxY: number;
++}
++export function atlasAreaView(area: AtlasArea, width: number, height: number, tileSizes: readonly number[]) {
++    const fit = Math.min(width / (area.maxX - area.minX), height / (area.maxY - area.minY)) * 0.9;
++    const fitting = tileSizes.filter(size => size <= fit);
++    return {x: (area.minX + area.maxX) / 2, y: (area.minY + area.maxY) / 2, tileSize: fitting[fitting.length - 1] ?? tileSizes[0]};
++}
+diff --git a/src/index.css b/src/index.css
+index cf11c0e..5f4b13d 100644
+--- a/src/index.css
++++ b/src/index.css
+@@ -70,3 +70,80 @@ canvas {
+ .rs-background {
+     background-image: url(./media/interface-bg.png);
+ }
++
++/* Embedded chrome stays out of the native canvas; direct /viewer/ keeps upstream UI. */
++.rs-watch-embedded:not(.rs-watch-native) .live-hud { display:none !important; }
++.rs-watch-embedded:not(.rs-watch-native) .hud.left-top { top:auto !important; bottom:52px !important; left:8px; }
++.rs-watch-embedded:not(.rs-watch-native) .fps-counter { display:none !important; }
++.rs-watch-embedded:not(.rs-watch-native) .worldmap-modal { inset:14px; }
++.rs-watch-embedded:not(.rs-watch-native) .worldmap-close-button { cursor:pointer; }
++@media (max-width:700px) {
++ .rs-watch-embedded:not(.rs-watch-native) .hud.left-top { bottom:68px !important; transform:scale(.8); transform-origin:bottom left; }
++}
++
++.worldmap-icon, .worldmap-close-button { padding:0; border:0; background-color:transparent; cursor:pointer; }
++
++@media(max-width:700px) {
++ .rs-watch-native .live-panel { width:min(46vw,220px); max-height:38dvh; right:8px; bottom:62px; }
++ .rs-watch-native .hud.left-top { transform:scale(.8); transform-origin:top left; }
++}
++
++/* Match the host's Whop Frosted surfaces; retain native camera and player behavior. */
++.rs-watch-embedded .live-panel.rs-border,
++.rs-watch-embedded .info-button.rs-border,
++.rs-watch-embedded .info-popup.rs-border {
++ border:1px solid #ffffff24; border-image:none; border-radius:16px;
++ background:linear-gradient(140deg,#2a303ba8,#151920ed);
++ backdrop-filter:blur(24px) saturate(1.2);
++ box-shadow:inset 0 1px 0 #ffffff12,0 12px 40px #0005;
++ color:#e9edf6; font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
++ text-shadow:none; font-size:12px;
++}
++.rs-watch-embedded .live-panel { width:270px; bottom:62px; right:16px; padding:5px; overflow:hidden; }
++.rs-watch-embedded .live-header { font-family:inherit; font-size:12px; padding:10px 8px; gap:8px; }
++.rs-watch-embedded .live-title { color:#eef3fc; font-weight:600; }
++.rs-watch-embedded .live-host { font-family:inherit; font-size:10px; color:#8f9aad; }
++.rs-watch-embedded .live-toggle { color:#a7b4c9; font-size:15px; }
++.rs-watch-embedded .live-dot { width:6px; height:6px; box-shadow:0 0 8px #7fe6af24; }
++.rs-watch-embedded .live-dot.open { background:#8ddbb1; }
++.rs-watch-embedded .live-stats,.rs-watch-embedded .live-follow { padding:9px 8px; border-top:1px solid #ffffff0d; color:#919db0; font-size:11px; gap:6px; }
++.rs-watch-embedded .live-value { color:#c3d4f4; font-weight:600; }
++.rs-watch-embedded .live-name { color:#e4eaf5; }
++.rs-watch-embedded .live-dim { color:#8592a7; font-size:10px; }
++.rs-watch-embedded .live-button { border:1px solid #ffffff15; border-radius:7px; padding:5px 9px; font:11px Inter,-apple-system,sans-serif; text-shadow:none; color:#c9d8f1; background:linear-gradient(#ffffff0d,#ffffff04); }
++.rs-watch-embedded .live-button:hover:not(:disabled) { color:#fff; background:#ffffff16; }
++.rs-watch-embedded .live-button:disabled { opacity:.4; }
++.rs-watch-embedded .live-step { padding:1px 5px 5px; gap:6px; }
++.rs-watch-embedded .live-search { border:1px solid #ffffff16; border-radius:9px; padding:9px 10px; margin:5px; font:11px Inter,-apple-system,sans-serif; background:#0d121b85; color:#e9edf6; }
++.rs-watch-embedded .live-search:focus { border-color:#8ab9ee99; box-shadow:0 0 0 2px #8ab9ee18; }
++.rs-watch-embedded .live-players { padding:3px 4px 4px; scrollbar-width:thin; scrollbar-color:#ffffff20 transparent; }
++.rs-watch-embedded button.live-player { min-height:32px; padding:7px 8px; font-size:11px; border-radius:7px; align-items:center; gap:10px; }
++.rs-watch-embedded .live-player:hover { background:#ffffff0b; }
++.rs-watch-embedded .live-player:hover .live-name { color:#fff; }
++.rs-watch-embedded .live-player.followed { background:#79a8ff18; box-shadow:inset 2px 0 #9dbbff; }
++.rs-watch-embedded .live-player.followed .live-name { color:#bed1ff; }
++.rs-watch-embedded .info-button { padding:8px 12px; font:11px Inter,-apple-system,sans-serif; }
++.rs-watch-embedded .info-title { color:#e6edff; font:600 13px Inter,-apple-system,sans-serif; border-color:#ffffff14; }
++.rs-watch-embedded .info-popup { padding:14px; }
++.rs-watch-embedded .info-popup p { line-height:1.5; color:#a9b5ca; }
++.rs-watch-embedded .info-popup a { color:#b4cbff; }
++.rs-watch-embedded .info-links { border-color:#ffffff14; gap:6px; }
++.rs-watch-embedded .fps-counter { display:none; }
++@media(max-width:700px) {
++ .rs-watch-embedded .live-panel { width:min(52vw,230px); right:8px; bottom:65px; max-height:42dvh; }
++ .rs-watch-embedded .live-header { padding:7px 5px; }
++ .rs-watch-embedded .live-host { display:none; }
++ .rs-watch-embedded .live-follow { flex-wrap:wrap; padding:7px 5px; }
++}
++
++/* Embedded monitor panes reserve their own controls outside the game canvas. */
++.rs-watch-embedded.rs-watch-compact .live-hud,
++.rs-watch-embedded.rs-watch-compact .hud,
++.rs-watch-embedded.rs-watch-compact .info-panel,
++.rs-watch-embedded.rs-watch-compact .info-button { display:none!important; }
++/* Narrow normal intelligence views must also keep the central player unobscured. */
++@media(max-width:700px),(max-height:460px){
++ .rs-watch-embedded:not(.rs-watch-native) .live-hud,
++ .rs-watch-embedded:not(.rs-watch-native) .hud,
++ .rs-watch-embedded:not(.rs-watch-native) .info-panel { display:none!important; }
++}
+diff --git a/src/live/Allegiance.ts b/src/live/Allegiance.ts
+new file mode 100644
+index 0000000..daefc44
+--- /dev/null
++++ b/src/live/Allegiance.ts
+@@ -0,0 +1,29 @@
++let names = new Set<string>();
++let ready = false;
++let receivedAt = 0;
++let onlyFriendlies = false;
++let visibleNames: Set<string> | undefined;
++const key=(name:string)=>name.trim().toLowerCase().replace(/[_ -]/g,'');
++export function setAllegiances(value:{names:string[];ready:boolean;onlyFriendlies?:boolean;visibleNames?:string[]}) {
++    names=new Set(value.names.filter(n=>typeof n==='string').map(key));
++    ready=value.ready===true;receivedAt=Date.now();
++    onlyFriendlies=value.onlyFriendlies===true;
++    visibleNames=Array.isArray(value.visibleNames)?new Set(value.visibleNames.filter(n=>typeof n==='string').map(key)):undefined;
++}
++export function playerAllegiance(name:string):'friendly'|'enemy'|'unknown' {
++    if(Date.now()-receivedAt>120000)return 'unknown';
++    if(names.has(key(name)))return 'friendly';
++    return ready?'enemy':'unknown';
++}
++export function playerColor(name:string) {
++    const relation=playerAllegiance(name);
++    return relation==='friendly'?'#6ee7a0':relation==='enemy'?'#ff7777':'#a8b1c1';
++}
++
++export function playerVisible(name:string):boolean {
++    return (!visibleNames || visibleNames.has(key(name))) && (!onlyFriendlies || playerAllegiance(name)==='friendly');
++}
++
++export function friendlyRosterReady():boolean {
++    return ready && Date.now()-receivedAt<=120000;
++}
+diff --git a/src/live/LiveController.ts b/src/live/LiveController.ts
+index 1b08328..4318035 100644
+--- a/src/live/LiveController.ts
++++ b/src/live/LiveController.ts
+@@ -1,3 +1,5 @@
++import {StreamTiming} from './StreamTiming';
++import {playerVisible} from './Allegiance';
+ import { Camera } from "../mapviewer/Camera";
+ import { TypeLoader } from "../rs/config/TypeLoader";
+ import { NpcTypeLoader } from "../rs/config/npctype/NpcTypeLoader";
+@@ -8,7 +10,7 @@ import { IndexedSprite } from "../rs/sprite/IndexedSprite";
+ import { LiveEntity, LivePlayer } from "./LiveEntity";
+ import { LiveWorld } from "./LiveWorld";
+ import { FeedStatus, WorldFeedClient } from "./WorldFeedClient";
+-import { RosterPlayer } from "./protocol";
++import { RosterPlayer, feedObservationTime } from "./protocol";
+ 
+ // Tiles streamed around the camera; the engine caps a subscription at 384 x 384, which a radius
+ // of 188 plus the grid padding fills exactly. Past that, players come from the roster instead.
+@@ -19,10 +21,10 @@ const AREA_GRID = 8;
+ 
+ // Follow is an orbit camera around the player's chest: rotating the camera (drag, arrow keys)
+ // circles the player, the wheel changes the distance, and moving the camera (WASD etc.) stops
+-// following. "Go to player" starts from the south-west, a little above.
+-const FOLLOW_YAW = 182;
+-const FOLLOW_PITCH = -185;
+-const FOLLOW_DISTANCE = 11;
++// following. "Go to player" starts north-up in a near-vertical drone view.
++const FOLLOW_YAW = 0;
++const FOLLOW_PITCH = -500;
++const FOLLOW_DISTANCE = 18;
+ const MIN_ORBIT_DISTANCE = 2;
+ const MAX_ORBIT_DISTANCE = 48;
+ const MIN_ORBIT_PITCH = -500;
+@@ -63,8 +65,28 @@ export class LiveController {
+     followName?: string;
+     // From ?follow=<name>: start following once the roster says where they are.
+     pendingFollow?: string;
++    onFollowRequest?: (name: string) => boolean;
+     // Orbit distance in tiles; 0 until the camera has been aimed at the player.
+-    private orbitDistance: number = 0;
++    orbitDistance: number = 0;
++    viewLocked: boolean = false;
++    private lockedOrbit?: {yaw:number;pitch:number;distance:number;fov:number};
++    setViewLock(locked:boolean,camera:Camera):void {
++        this.viewLocked=locked && !!this.followName;
++        this.lockedOrbit=this.viewLocked?{yaw:camera.yaw,pitch:camera.pitch,distance:this.orbitDistance||FOLLOW_DISTANCE,fov:camera.fov}:undefined;
++    }
++    overheadView(camera:Camera):void {
++        camera.yaw=FOLLOW_YAW;camera.pitch=FOLLOW_PITCH;this.orbitDistance=FOLLOW_DISTANCE;
++        camera.updated=true;
++        this.setViewLock(true,camera);
++    }
++    restoreOrbit(camera:Camera,value:any):void {
++        if(!value||![value.yaw,value.pitch,value.orbitDistance].every(Number.isFinite)||value.orbitDistance<=0)return;
++        camera.yaw=value.yaw;camera.pitch=clamp(value.pitch,MIN_ORBIT_PITCH,MAX_ORBIT_PITCH);
++        this.orbitDistance=clamp(value.orbitDistance,MIN_ORBIT_DISTANCE,MAX_ORBIT_DISTANCE);
++        if([value.x,value.z,value.height].every(Number.isFinite)){camera.pos[0]=value.x;camera.pos[1]=-value.height;camera.pos[2]=value.z;camera.updated=true;camera.updatedPosition=true;}
++        if(Number.isFinite(value.fov))camera.fov=clamp(value.fov,20,120);
++        this.setViewLock(value.locked===true,camera);
++    }
+     private lastRosterJumpTick: number = -1;
+ 
+     // The Live panel's search. It lives here so the next/previous player keys step through the
+@@ -79,6 +101,11 @@ export class LiveController {
+ 
+     // The client's hitmark sprites (media archive "hitmarks"), indexed by damage type.
+     hitmarkSprites: IndexedSprite[] = [];
++    // Rev-289 media/headicons: bit 0 of appearance.headIcons is sprite 0 (skull).
++    headIconSprites: IndexedSprite[] = [];
++    readonly streamTiming = new StreamTiming();
++    lastTickAt: number = 0;
++    lastRosterAt: number = 0;
+ 
+     constructor(
+         readonly url: string,
+@@ -90,16 +117,23 @@ export class LiveController {
+         this.world = new LiveWorld(npcTypeLoader, seqTypeLoader, seqFrameLoader, spotAnimTypeLoader);
+         this.feed = new WorldFeedClient(url, {
+             onHello: () => {
++                this.streamTiming.reset();
++                this.lastTickAt = 0;
++                this.lastRosterAt = 0;
+                 this.world.clear();
+                 this.world.far.clear();
+                 this.version++;
+             },
+             onTick: (tick) => {
+-                this.world.applyTick(tick);
++                const observedAt = feedObservationTime(tick);
++                this.world.applyTick(tick, observedAt);
++                this.lastTickAt = observedAt;
++                if (tick.relaySnapshot === false) this.streamTiming.applied(observedAt);
+                 this.version++;
+             },
+             onRoster: (roster) => {
+                 this.world.applyRoster(roster);
++                this.lastRosterAt = feedObservationTime(roster);
+                 this.version++;
+             },
+             onStatus: (status, error) => {
+@@ -131,9 +165,10 @@ export class LiveController {
+         if (this.pendingFollow && this.world.rosterTick !== -1) {
+             const name = this.pendingFollow;
+             this.pendingFollow = undefined;
+-            this.goToPlayer(name, camera);
++            this.goToPlayer(name, camera, true);
+         }
+ 
++        this.world.focusName=this.followName;
+         this.updateFollow(camera, getGroundY);
+ 
+         // Seeing further than the engine will stream: the half behind the camera is mostly off
+@@ -155,6 +190,7 @@ export class LiveController {
+ 
+     // Follow a visible player: the camera turns to face them from where it is.
+     follow(player: LivePlayer): void {
++        if (this.onFollowRequest?.(player.name)) return;
+         this.followName = player.name;
+         this.followSlot = player.id;
+         this.orbitDistance = 0;
+@@ -163,7 +199,12 @@ export class LiveController {
+ 
+     // Fly to a player (they may be outside the streamed area, then the roster has them) and
+     // keep following them.
+-    goToPlayer(name: string, camera: Camera): void {
++    goToPlayer(name: string, camera: Camera, replace: boolean = false): void {
++        if (!replace && this.onFollowRequest?.(name)) return;
++        const same=this.followName?.toLowerCase()===name.toLowerCase();
++        if(same)return;
++        this.viewLocked=false;this.lockedOrbit=undefined;
++        this.followName=name;this.followSlot=-1;this.overheadView(camera);
+         const visible = this.world.findPlayer(name);
+         const entry = this.world.rosterPlayers.find((p) => p[1].toLowerCase() === name.toLowerCase());
+         if (visible) {
+@@ -189,7 +230,7 @@ export class LiveController {
+                 .sort((a, b) => a[1].localeCompare(b[1]));
+             this.listed = { roster, filter, players };
+         }
+-        return this.listed.players;
++        return this.listed.players.filter(p => playerVisible(p[1]));
+     }
+ 
+     // Go to the listed player after (step 1) or before (step -1) the followed one, wrapping
+@@ -215,7 +256,9 @@ export class LiveController {
+         this.goToPlayer(next[1], camera);
+     }
+ 
+-    unfollow(): void {
++    unfollow(force=false): void {
++        if(this.viewLocked&&!force)return;
++        this.viewLocked=false;this.lockedOrbit=undefined;
+         if (this.followName === undefined) {
+             return;
+         }
+@@ -226,7 +269,7 @@ export class LiveController {
+ 
+     // Mouse wheel while following: zoom the orbit in or out.
+     zoom(wheelDelta: number): void {
+-        if (wheelDelta === 0 || this.orbitDistance === 0) {
++        if (this.viewLocked || wheelDelta === 0 || this.orbitDistance === 0) {
+             return;
+         }
+         this.orbitDistance = clamp(this.orbitDistance * Math.exp(wheelDelta * 0.0015), MIN_ORBIT_DISTANCE, MAX_ORBIT_DISTANCE);
+@@ -253,6 +296,8 @@ export class LiveController {
+             return;
+         }
+ 
++        if(!this.orbitDistance)this.overheadView(camera);
++        if(this.viewLocked&&this.lockedOrbit){camera.yaw=this.lockedOrbit.yaw;camera.pitch=this.lockedOrbit.pitch;this.orbitDistance=this.lockedOrbit.distance;camera.fov=this.lockedOrbit.fov;}
+         let player = this.getFollowed();
+         if (player && player.name.toLowerCase() !== this.followName.toLowerCase()) {
+             // Slot reused by someone else.
+@@ -273,9 +318,18 @@ export class LiveController {
+                 this.lastRosterJumpTick = this.world.rosterTick;
+                 const name = this.followName.toLowerCase();
+                 const entry = this.world.rosterPlayers.find((p) => p[1].toLowerCase() === name);
+-                if (entry && (Math.abs(entry[2] + 0.5 - camera.getPosX()) > 32 || Math.abs(entry[3] + 0.5 - camera.getPosZ()) > 32)) {
+-                    this.flyTo(camera, entry[2] + 0.5, entry[3] + 0.5);
++                if(entry){
++                    // Roster-only tracking preserves the orbit instead of repeatedly calling flyTo,
++                    // which resets yaw/pitch/zoom. Use interpolated roster positions between updates.
++                    if(!this.orbitDistance){camera.yaw=FOLLOW_YAW;camera.pitch=FOLLOW_PITCH;this.orbitDistance=FOLLOW_DISTANCE;}
+                 }
++
++            }
++            const far=[...this.world.far.players.values()].find(p=>p.name.toLowerCase()===this.followName!.toLowerCase());
++            if(far){const t=this.world.far.getProgress(this.world.loopCycle),x=far.fromX+(far.toX-far.fromX)*t,z=far.fromZ+(far.toZ-far.fromZ)*t;
++                const ground=getGroundY({x,z,level:far.level} as LiveEntity);
++                if(ground!==undefined)placeOrbitCamera(camera,x/128,(ground-ORBIT_PIVOT_HEIGHT)/128,z/128,this.orbitDistance||FOLLOW_DISTANCE);
++                else placeOrbitCamera(camera,x/128,0,z/128,this.orbitDistance||FOLLOW_DISTANCE);
+             }
+             return;
+         }
+diff --git a/src/live/LiveEntityRenderer.ts b/src/live/LiveEntityRenderer.ts
+index 5edf78c..8c3097c 100644
+--- a/src/live/LiveEntityRenderer.ts
++++ b/src/live/LiveEntityRenderer.ts
+@@ -1,3 +1,5 @@
++import {getAppearanceModelKey} from "./PlayerAppearance";
++import {playerVisible} from './Allegiance';
+ import PicoGL, {
+     DrawCall,
+     App as PicoApp,
+@@ -29,11 +31,10 @@ const PAGE_IDLE_MS = 2000;
+ const EVICT_INTERVAL_MS = 500;
+ // Detail by distance from the camera, in tiles (a player is about 15px tall at 48 on a 1000px
+ // canvas), so a zoomed-out crowd bakes and draws few pages. Past DETAIL_DISTANCE players drop
+-// their own colours (from 24 while GPU memory is tight). Past POSE_DISTANCE every player is the
+-// same default body standing or walking, and npcs only idle.
++// animation detail while retaining the observed body and colours. Roster-only players
++// remain generic unless a followed player has a bounded last-observed appearance.
+ const DETAIL_DISTANCE = 48;
+ const DETAIL_DISTANCE_LOW_MEMORY = 24;
+-const POSE_DISTANCE = 96;
+ // Far entities step through their walk or idle anim at this many client cycles per frame.
+ const FAR_FRAME_CYCLES = 4;
+ const FAR_PLAYER_SPEC: EntityModelSpec = { kind: "player", appearance: FAR_PLAYER_APPEARANCE, leftHand: -1, rightHand: -1 };
+@@ -109,6 +110,7 @@ export class LiveEntityRenderer {
+     private cameraX: number = 0;
+     private cameraY: number = 0;
+     private cameraZ: number = 0;
++    private followedFarPage?: {name:string;page:EntityAnimPage};
+     private detailDistance: number = DETAIL_DISTANCE;
+     // Entities this frame and their squared distance from the camera, for nearest-first order.
+     private order: LiveEntity[] = [];
+@@ -158,7 +160,7 @@ export class LiveEntityRenderer {
+         order.length = 0;
+         if (this.showPlayers) {
+             for (const player of this.world.players.values()) {
+-                order.push(player);
++                if (playerVisible(this.world.far.players.get(player.id)?.name ?? player.getName())) order.push(player);
+             }
+         }
+         if (this.showNpcs) {
+@@ -212,11 +214,14 @@ export class LiveEntityRenderer {
+ 
+         let page: EntityAnimPage | undefined;
+         let frame: number;
+-        if (distance >= POSE_DISTANCE) {
++        if (distance >= this.detailDistance && !(isPlayer && (e as LivePlayer).name.toLowerCase()===this.world.focusName?.toLowerCase())) {
+             // Far away: players share the default body standing or walking (like players outside
+             // the streamed area) and npcs only idle, so a crowd draws from a few pages.
+             if (isPlayer) {
+-                page = this.getFarPlayerPage(e.secondaryAnim !== e.readyanim && e.secondaryAnim !== e.turnanim);
++                // Simplify the pose, never replace observed equipment with a generic body.
++                const seqId = e.secondaryAnim !== e.readyanim && e.secondaryAnim !== e.turnanim ? e.walkanim : e.readyanim;
++                const model = this.getModelKey(e, seqId, distance);
++                page = model ? this.requestPage(model.key + "@" + seqId, model.spec, seqId) : undefined;
+             } else {
+                 const npcType = (e as LiveNpc).npcType.id;
+                 page = this.requestPage("n" + npcType + "@" + e.readyanim, { kind: "npc", npcType }, e.readyanim);
+@@ -313,7 +318,7 @@ export class LiveEntityRenderer {
+             if (this.items.length >= MAX_INSTANCES) {
+                 break;
+             }
+-            if (p.level > maxLevel || this.world.players.has(p.slot)) {
++            if (!playerVisible(p.name) || p.level > maxLevel || this.world.players.has(p.slot)) {
+                 continue;
+             }
+             const x = Math.round(p.fromX + (p.toX - p.fromX) * t);
+@@ -325,7 +330,16 @@ export class LiveEntityRenderer {
+             if (!ground) {
+                 continue;
+             }
+-            const page = far.isMoving(p, t) ? walk : idle;
++            let page = far.isMoving(p, t) ? walk : idle;
++            // Only the followed roster-only player gets a bounded last-observed model.
++            // Other players retain the cheap generic mesh; cached armor is labeled in pane chrome.
++            const known=this.world.focusName?.toLowerCase()===p.name.toLowerCase()?this.world.knownAppearance(p.name):undefined;
++            if(known){const appearance=known.appearance,seqId=far.isMoving(p,t)?appearance.walkAnim:appearance.readyAnim;
++                const requested=this.requestPage('p'+getAppearanceModelKey(appearance)+'@'+seqId,{kind:'player',appearance,leftHand:-1,rightHand:-1},seqId);
++                const held=this.followedFarPage;
++                if(requested){page=requested;this.followedFarPage={name:p.name,page:requested};}
++                else if(held?.name===p.name&&this.pages.get(held.page.key)===held.page)page=held.page;
++            }
+             const frame = (Math.floor(loopCycle / FAR_FRAME_CYCLES) + p.slot) % page.frames.length;
+             page.lastUsedAt = this.now;
+             this.items.push({
+@@ -367,9 +381,8 @@ export class LiveEntityRenderer {
+             leftHand = seq.leftHandItem;
+             rightHand = seq.rightHandItem;
+         }
+-        const far = distance > this.detailDistance;
+-        const appearance = far ? player.lodAppearance! : player.appearance;
+-        const modelKey = far ? player.lodModelKey : player.modelKey;
++        const appearance = player.appearance;
++        const modelKey = player.modelKey;
+         return {
+             key: "p" + modelKey + (leftHand >= 0 || rightHand >= 0 ? `|${leftHand}|${rightHand}` : ""),
+             spec: { kind: "player", appearance, leftHand, rightHand },
+diff --git a/src/live/LiveOverlay.ts b/src/live/LiveOverlay.ts
+index 0467a9f..10967c2 100644
+--- a/src/live/LiveOverlay.ts
++++ b/src/live/LiveOverlay.ts
+@@ -1,3 +1,6 @@
++import {researchView,researchShapes,rosterFresh,detailFresh} from './ResearchLayers';
++import {multiCombatView,isMultiCombat} from './MultiCombat';
++import {playerColor,playerVisible} from './Allegiance';
+ import { vec4 } from "gl-matrix";
+ 
+ import { Camera } from "../mapviewer/Camera";
+@@ -46,6 +49,8 @@ type OverlayEntity = {
+     chatY?: number;
+     combat: boolean;
+     hitmarks: boolean;
++    headIcons: number[];
++    iconY: number;
+ };
+ 
+ type FarName = {
+@@ -63,10 +68,15 @@ export class LiveOverlay {
+     readonly ctx: CanvasRenderingContext2D;
+ 
+     private clip = vec4.create();
++    private researchCache:ReturnType<typeof researchShapes>=[];
++    private researchAt=0;
+ 
+     // The cache's hitmark sprites as canvases, rebuilt when the controller's sprites change.
+     private hitmarkSource?: IndexedSprite[];
+     private hitmarks: HTMLCanvasElement[] = [];
++    private headIconSource?: IndexedSprite[];
++    private skull?: HTMLCanvasElement;
++    private prayerIcons: (HTMLCanvasElement | undefined)[] = [];
+ 
+     private grid: Uint8Array = new Uint8Array(0);
+     private gridCols: number = 0;
+@@ -82,7 +92,7 @@ export class LiveOverlay {
+     draw(
+         controller: LiveController,
+         camera: Camera,
+-        getGroundY: (e: LiveEntity) => number | undefined,
++        getGroundY: (e: Pick<LiveEntity,'x'|'z'|'level'>) => number | undefined,
+         maxLevel: number,
+         renderDistance: number,
+         fogDepth: number,
+@@ -101,13 +111,60 @@ export class LiveOverlay {
+         ctx.clearRect(0, 0, width, height);
+         ctx.imageSmoothingEnabled = false;
+ 
++        if(multiCombatView.enabled) {
++            // Only inspect nearby 8x8 zones; projected terrain markings sit beneath names/icons.
++            const plane=multiCombatView.plane;
++            const radius=Math.min(renderDistance,96);
++            ctx.save();ctx.fillStyle='rgba(255,197,61,0.13)';ctx.strokeStyle='rgba(255,210,100,0.85)';ctx.lineWidth=1.5;
++            for(let x=Math.floor((camera.getPosX()-radius)/8)*8;x<camera.getPosX()+radius;x+=8) {
++                for(let z=Math.floor((camera.getPosZ()-radius)/8)*8;z<camera.getPosZ()+radius;z+=8) {
++                    if(!isMultiCombat(x,z,plane))continue;
++                    const corners=[[x,z],[x+8,z],[x+8,z+8],[x,z+8]];
++                    const points=corners.map(([tx,tz])=>{
++                        const y=getGroundY({x:tx*128,z:tz*128,level:plane});
++                        return y===undefined?undefined:this.project(camera,tx*128,y-3,tz*128,width,height,false);
++                    });
++                    if(points.some(p=>!p))continue;
++                    const p=points as ScreenPos[];
++                    if(p.every(v=>v.x<0)||p.every(v=>v.x>width)||p.every(v=>v.y<0)||p.every(v=>v.y>height))continue;
++                    ctx.beginPath();p.forEach((v,i)=>i?ctx.lineTo(v.x,v.y):ctx.moveTo(v.x,v.y));ctx.closePath();ctx.fill();
++                    const neighbors=[[x,z-8],[x+8,z],[x,z+8],[x-8,z]];
++                    neighbors.forEach(([nx,nz],i)=>{if(!isMultiCombat(nx,nz,plane)){
++                        ctx.beginPath();ctx.moveTo(p[i].x,p[i].y);ctx.lineTo(p[(i+1)%4].x,p[(i+1)%4].y);ctx.stroke();
++                    }});
++                }
++            }
++            ctx.restore();
++        }
++        if(researchView.source) {
++            const radius=Math.min(renderDistance,128),plane=multiCombatView.plane;
++            if(Date.now()-this.researchAt>250){this.researchAt=Date.now();this.researchCache=researchShapes(researchView.source,researchView.settings,plane,{minX:camera.getPosX()-radius,maxX:camera.getPosX()+radius,minZ:camera.getPosZ()-radius,maxZ:camera.getPosZ()+radius},playerColor,playerVisible);}
++            const shapes=this.researchCache;
++            ctx.save();ctx.lineWidth=2;
++            for(const shape of shapes) {
++                // Use loaded terrain only. Never project a marker onto an invented floor.
++                const points=shape.points.map(([x,z])=>{const y=getGroundY({x:x*128,z:z*128,level:plane});return y===undefined?undefined:this.project(camera,x*128,y-5,z*128,width,height,false);});
++                if(points.some(p=>!p))continue;
++                ctx.globalAlpha=shape.alpha;ctx.fillStyle=shape.color;ctx.strokeStyle=shape.color;ctx.setLineDash(shape.dashed?[3,4]:[]);
++                ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p!.x,p!.y):ctx.moveTo(p!.x,p!.y));
++                if(shape.fill){ctx.closePath();ctx.fill();}else ctx.stroke();
++            }
++            ctx.restore();
++            if(researchView.settings.coverage) {
++                const a=researchView.source.area;
++                const inside=!!a&&camera.getPosX()>=a.x&&camera.getPosX()<a.x+a.w&&camera.getPosZ()>=a.z&&camera.getPosZ()<a.z+a.h;
++                const label=!rosterFresh(researchView.source)?'STALE · positions unavailable':!detailFresh(researchView.source)?'DETAIL STALE · roster only':inside?'LIVE DETAIL COVERAGE':'ROSTER ONLY · outside detail area';
++                ctx.save();ctx.font='10px sans-serif';ctx.fillStyle='rgba(15,20,27,.85)';ctx.fillRect(6,height-24,Math.min(width-12,ctx.measureText(label).width+12),18);ctx.fillStyle=inside&&detailFresh(researchView.source)?'#7ce2ff':'#cbd5e1';ctx.fillText(label,12,height-11,Math.max(0,width-24));ctx.restore();
++            }
++        }
+         const { options, world } = controller;
+         const loopCycle = world.loopCycle;
+         const followed = controller.getFollowed();
++        const skullsFresh = controller.status === "open" && controller.lastTickAt > 0 && Date.now() - controller.lastTickAt <= 5000;
+ 
+         const entities: LiveEntity[] = [];
+         if (options.showPlayers) {
+-            entities.push(...world.players.values());
++            entities.push(...Array.from(world.players.values()).filter(p => playerVisible(world.far.players.get(p.id)?.name ?? p.getName())));
+         }
+         if (options.showNpcs) {
+             entities.push(...world.npcs.values());
+@@ -132,7 +189,12 @@ export class LiveOverlay {
+             const combat = near && options.showCombat && e.combatCycle > loopCycle + 100 && e.totalHealth > 0;
+             const chat = near && options.showChat && e.chatMessage !== null && e.chatTimer > 0;
+             const hitmarks = near && options.showCombat && e.damageCycles.some((cycle) => cycle > loopCycle);
+-            if (!showName && !combat && !chat && !hitmarks) {
++            // Appearance is only available for streamed players, never infer a skull from the roster body.
++            const rosterName = isPlayer ? world.far.players.get(e.id)?.name : undefined;
++            const iconsObserved = isPlayer && skullsFresh && nameAlpha > 0 && !!e.appearance &&
++                (!rosterName || rosterName.toLowerCase().replace(/[_ -]/g, '') === e.getName().toLowerCase().replace(/[_ -]/g, ''));
++            const headIcons = iconsObserved ? [0, 3, 4, 5].filter(index => ((e as LivePlayer).appearance!.headIcons & (1 << index)) !== 0) : [];
++            if (!showName && !combat && !chat && !hitmarks && !headIcons.length) {
+                 continue;
+             }
+ 
+@@ -154,12 +216,14 @@ export class LiveOverlay {
+                 top,
+                 head,
+                 name: showName ? (isPlayer ? e.getName() : formatNpcName(e as LiveNpc)) : undefined,
+-                nameColour: isFollowed ? "#ff981f" : isPlayer ? "#ffffff" : "#ffff00",
++                nameColour: isPlayer ? playerColor(e.getName()) : "#ffff00",
+                 nameAlpha,
+                 nameY: top.y - 8,
+                 chatY: chat ? head.y : undefined,
+                 combat,
+                 hitmarks,
++                headIcons,
++                iconY: Math.max(0, top.y - 48 - Math.max(0, headIcons.length - 1) * 25),
+             });
+         }
+ 
+@@ -167,6 +231,7 @@ export class LiveOverlay {
+         const farNames: FarName[] = [];
+         if (options.showPlayerNames) {
+             for (const p of farLabels) {
++                if (!playerVisible(p.name)) continue;
+                 const dx = p.x / 128 - camera.getPosX();
+                 const dz = p.z / 128 - camera.getPosZ();
+                 const alpha = getFogVisibility(dx, dz, renderDistance, fogDepth);
+@@ -181,6 +246,10 @@ export class LiveOverlay {
+         // area's names outrank the roster's, which are further away.
+         overlays.sort((a, b) => (a.followed ? -1 : b.followed ? 1 : a.distance - b.distance));
+         this.resetGrid(width, height);
++        // Reserve overhead icons before decluttering text, so hiding names or busy labels cannot hide a skull.
++        for (const o of overlays) {
++            if (o.headIcons.length) this.occupy(o.top.x - 16, o.iconY, o.top.x + 16, o.iconY + 25 * o.headIcons.length, true);
++        }
+         for (const o of overlays) {
+             if (o.chatY === undefined) {
+                 continue;
+@@ -221,7 +290,7 @@ export class LiveOverlay {
+         for (let i = farNames.length - 1; i >= 0; i--) {
+             const n = farNames[i];
+             if (n.placed) {
+-                this.drawText(n.name, n.top.x, n.top.y - 8, "#ffffff", n.alpha);
++                this.drawText(n.name, n.top.x, n.top.y - 8, playerColor(n.name), n.alpha);
+             }
+         }
+         for (let i = overlays.length - 1; i >= 0; i--) {
+@@ -259,6 +328,35 @@ export class LiveOverlay {
+                 this.drawChat(o.e, o.head.x, o.chatY, loopCycle);
+             }
+         }
++        for (let i = overlays.length - 1; i >= 0; i--) {
++            const o = overlays[i];
++            o.headIcons.forEach((icon, index) => this.drawHeadIcon(controller, icon, o.top.x, o.iconY + index * 25, o.nameAlpha));
++        }
++    }
++
++    private drawHeadIcon(controller: LiveController, icon: number, x: number, y: number, alpha: number): void {
++        if (this.headIconSource !== controller.headIconSprites) {
++            this.headIconSource = controller.headIconSprites;
++            this.skull = controller.headIconSprites[0] ? spriteToCanvas(controller.headIconSprites[0]) : undefined;
++            this.prayerIcons = controller.headIconSprites.map(sprite => sprite ? spriteToCanvas(sprite) : undefined);
++        }
++        const ctx = this.ctx;
++        ctx.globalAlpha = alpha;
++        const sprite = icon === 0 ? this.skull : this.prayerIcons[icon];
++        if (sprite) {
++            ctx.drawImage(sprite, Math.round(x - sprite.width / 2), Math.round(y));
++        } else if (icon !== 0) {
++            // Explicit text if the exact cache sprite is unavailable; never guess a prayer.
++            this.drawText(icon === 3 ? "Melee" : icon === 4 ? "Range" : "Magic", x, y + 16, "#ffffff", alpha);
++        } else {
++            // Small pixel fallback if the cache has no headicon sheet; avoid platform emoji fonts.
++            const rows = ["0011111100","0111111110","1111111111","1100110011","1100110011","1111111111","0111001110","0011111100","0010101000"];
++            ctx.fillStyle = "#ffffff";
++            rows.forEach((row, yy) => [...row].forEach((pixel, xx) => {
++                if (pixel === "1") ctx.fillRect(Math.round(x) - 10 + xx * 2, Math.round(y) + yy * 2, 2, 2);
++            }));
++        }
++        ctx.globalAlpha = 1;
+     }
+ 
+     private resetGrid(width: number, height: number): void {
+@@ -385,7 +483,7 @@ export class LiveOverlay {
+         ctx.globalAlpha = 1;
+     }
+ 
+-    private project(camera: Camera, fineX: number, fineY: number, fineZ: number, width: number, height: number): ScreenPos | undefined {
++    private project(camera: Camera, fineX: number, fineY: number, fineZ: number, width: number, height: number, cullScreen = true): ScreenPos | undefined {
+         const clip = this.clip;
+         vec4.set(clip, fineX / 128, fineY / 128, fineZ / 128, 1);
+         vec4.transformMat4(clip, clip, camera.viewProjMatrix);
+@@ -394,7 +492,7 @@ export class LiveOverlay {
+         }
+         const ndcX = clip[0] / clip[3];
+         const ndcY = clip[1] / clip[3];
+-        if (ndcX < -1.2 || ndcX > 1.2 || ndcY < -1.2 || ndcY > 1.2) {
++        if (cullScreen && (ndcX < -1.2 || ndcX > 1.2 || ndcY < -1.2 || ndcY > 1.2)) {
+             return undefined;
+         }
+         return {
+diff --git a/src/live/LivePanel.css b/src/live/LivePanel.css
+index d15b1de..143b33c 100644
+--- a/src/live/LivePanel.css
++++ b/src/live/LivePanel.css
+@@ -179,3 +179,11 @@
+     height: 100%;
+     pointer-events: none;
+ }
++
++/* Semantic controls retain the native layout in the standalone viewer. */
++button.live-header,button.live-player { width:100%; box-sizing:border-box; border:0; background:none; text-align:left; color:inherit; font:inherit; text-shadow:inherit; }
++button.live-header:focus-visible,button.live-player:focus-visible { outline:2px solid #a9c7ff; outline-offset:-2px; }
++
++.live-stats { display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px 12px; }
++.live-my-bots { white-space:nowrap; }
++.live-my-bots .live-value { color:#6ee7a0; }
+diff --git a/src/live/LivePanel.tsx b/src/live/LivePanel.tsx
+index 1f6ab3e..8094e4a 100644
+--- a/src/live/LivePanel.tsx
++++ b/src/live/LivePanel.tsx
+@@ -1,3 +1,4 @@
++import {playerColor, playerAllegiance, friendlyRosterReady} from './Allegiance';
+ import { useEffect, useRef, useState } from "react";
+ 
+ import { MapViewer } from "../mapviewer/MapViewer";
+@@ -29,9 +30,9 @@ export function LivePanel({ mapViewer }: { mapViewer: MapViewer }): JSX.Element
+     const live = mapViewer.live;
+     const [search, setSearch] = useState(live?.playerFilter ?? "");
+     const [shownCount, setShownCount] = useState(PAGE_SIZE);
+-    const [collapsed, setCollapsed] = useState(false);
++    const [collapsed, setCollapsed] = useState(()=>window.parent!==window);
+     const listRef = useRef<HTMLDivElement>(null);
+-    const followedRef = useRef<HTMLDivElement>(null);
++    const followedRef = useRef<HTMLButtonElement>(null);
+     const scrollToFollowed = useRef(false);
+ 
+     const players = live?.listPlayers() ?? [];
+@@ -76,31 +77,37 @@ export function LivePanel({ mapViewer }: { mapViewer: MapViewer }): JSX.Element
+     }
+ 
+     const { world, status, error } = live;
++    const myBotsOnline = status === "open" && world.rosterTick !== -1 && friendlyRosterReady()
++        ? world.rosterPlayers.filter(p => playerAllegiance(p[1]) === "friendly").length
++        : null;
+     const statusText =
+         status === "open" ? "Live" : status === "connecting" ? "Connecting" : "Offline";
+ 
+     return (
+         <div className={"live-panel rs-border rs-background" + (collapsed ? " collapsed" : "")}>
+-            <div className="live-header" onClick={() => setCollapsed(!collapsed)}>
++            <button type="button" aria-label="Toggle live player panel" aria-expanded={!collapsed} className="live-header" onClick={() => setCollapsed(!collapsed)}>
+                 <span className={"live-dot " + status} />
+                 <span className="live-title">{statusText}</span>
+                 <span className="live-host">{formatHost(live.url)}</span>
+                 <span className="live-toggle">{collapsed ? "+" : "-"}</span>
+-            </div>
++            </button>
+ 
+             {!collapsed && (
+                 <>
+                     {status !== "open" && error && <div className="live-error">{error}</div>}
+ 
+                     <div className="live-stats">
+-                        <span className="live-value">{world.rosterPlayers.length}</span> online
++                        <span><span className="live-value">{world.rosterPlayers.length}</span> online</span>
++                        <span className="live-my-bots" title="Online players in the project friendly registry, including configured allies">
++                            My bots <span className="live-value">{myBotsOnline ?? "—"}</span>
++                        </span>
+                     </div>
+ 
+                     {followed && (
+                         <div className="live-follow">
+                             Following <span className="live-name">{followed}</span>
+                             {!live.getFollowed() && <span className="live-dim"> (finding)</span>}
+-                            <button className="live-button" onClick={() => live.unfollow()}>
++                            <button className="live-button" onClick={() => live.unfollow(true)}>
+                                 Stop
+                             </button>
+                         </div>
+@@ -127,6 +134,7 @@ export function LivePanel({ mapViewer }: { mapViewer: MapViewer }): JSX.Element
+ 
+                     <input
+                         className="live-search"
++                        aria-label="Find a player in the live world"
+                         placeholder="Find a player..."
+                         value={search}
+                         onChange={(e) => {
+@@ -148,16 +156,19 @@ export function LivePanel({ mapViewer }: { mapViewer: MapViewer }): JSX.Element
+                         {players.slice(0, shownCount).map(([slot, name, x, z, level, combat]) => {
+                             const isFollowed = name.toLowerCase() === followedKey;
+                             return (
+-                                <div
++                                <button
++                                    type="button"
++                                    aria-label={`Follow ${name}`}
++                                    aria-pressed={isFollowed}
+                                     key={slot}
+                                     ref={isFollowed ? followedRef : undefined}
+                                     className={"live-player" + (isFollowed ? " followed" : "")}
+                                     title={`${x}, ${z}${level > 0 ? `, level ${level}` : ""}`}
+                                     onClick={() => live.goToPlayer(name, mapViewer.camera)}
+                                 >
+-                                    <span className="live-name">{name}</span>
++                                    <span className="live-name" style={{color:playerColor(name)}} title={playerAllegiance(name)}>{name}</span>
+                                     <span className="live-dim">cb {combat}</span>
+-                                </div>
++                                </button>
+                             );
+                         })}
+                         {players.length === 0 && (
+diff --git a/src/live/LiveWorld.ts b/src/live/LiveWorld.ts
+index 52f31c4..e842d26 100644
+--- a/src/live/LiveWorld.ts
++++ b/src/live/LiveWorld.ts
+@@ -15,7 +15,7 @@ import {
+     getPostanimMove,
+     getPreanimMove,
+ } from "./LiveEntity";
+-import { decodePlayerAppearance } from "./PlayerAppearance";
++import { PlayerAppearance, decodePlayerAppearance } from "./PlayerAppearance";
+ import { FeedEntity, FeedRoster, FeedTick, RosterPlayer } from "./protocol";
+ 
+ const DUPLICATE_RESET = 1;
+@@ -25,6 +25,18 @@ const DUPLICATE_RESETLOOP = 2;
+ // rs-sdk webclient (Client.moveEntity and friends), including its tick-rate speed scaling.
+ export class LiveWorld {
+     players: Map<number, LivePlayer> = new Map();
++    focusName?:string;
++    private appearanceMemory=new Map<string,{appearance:PlayerAppearance;at:number}>();
++    rememberAppearance(appearance:PlayerAppearance,at=Date.now()):void {
++        const key=appearance.name.toLowerCase();if(!key)return;
++        this.appearanceMemory.delete(key);this.appearanceMemory.set(key,{appearance,at});
++        while(this.appearanceMemory.size>1000)this.appearanceMemory.delete(this.appearanceMemory.keys().next().value!);
++    }
++    knownAppearance(name:string,now=Date.now()) {
++        const key=name.toLowerCase(),saved=this.appearanceMemory.get(key);
++        if(saved&&now-saved.at<=300000)return saved;
++        this.appearanceMemory.delete(key);return undefined;
++    }
+     npcs: Map<number, LiveNpc> = new Map();
+ 
+     loopCycle: number = 0;
+@@ -52,7 +64,7 @@ export class LiveWorld {
+         this.npcs.clear();
+     }
+ 
+-    applyTick(msg: FeedTick): void {
++    applyTick(msg: FeedTick, observedAt = Date.now()): void {
+         if (msg.reset) {
+             this.clear();
+         }
+@@ -76,7 +88,7 @@ export class LiveWorld {
+         }
+         if (msg.p) {
+             for (const record of msg.p) {
+-                this.applyPlayer(record);
++                this.applyPlayer(record, observedAt);
+             }
+         }
+         if (msg.n) {
+@@ -84,6 +96,8 @@ export class LiveWorld {
+                 this.applyNpc(record);
+             }
+         }
++        // A delta tick still observes unchanged equipment in the current detail area.
++        for(const player of this.players.values())if(player.appearance)this.rememberAppearance(player.appearance, observedAt);
+     }
+ 
+     applyRoster(msg: FeedRoster): void {
+@@ -110,7 +124,7 @@ export class LiveWorld {
+         return undefined;
+     }
+ 
+-    private applyPlayer(record: FeedEntity): void {
++    private applyPlayer(record: FeedEntity, observedAt: number): void {
+         let player = this.players.get(record.i);
+         const isNew = record.f === 1 || !player;
+         if (isNew) {
+@@ -122,6 +136,7 @@ export class LiveWorld {
+         }
+         if (record.ap) {
+             player.setAppearance(decodePlayerAppearance(base64ToBytes(record.ap)));
++            this.rememberAppearance(player.appearance!, observedAt);
+         }
+         this.applyMovement(player, record, isNew);
+         this.applyMasks(player, record, true);
+diff --git a/src/live/ObservedEquipment.ts b/src/live/ObservedEquipment.ts
+new file mode 100644
+index 0000000..985d8ca
+--- /dev/null
++++ b/src/live/ObservedEquipment.ts
+@@ -0,0 +1,12 @@
++import type {PlayerAppearance} from './PlayerAppearance';
++const SLOTS=['Head','Cape','Neck','Weapon','Body','Shield','Arms','Legs','Hair','Hands','Feet','Beard'];
++/** Appearance contains equipment IDs offset by 512, distinct from identity kits. */
++export function observedEquipment(appearance:PlayerAppearance|undefined,resolveName:(id:number)=>string|undefined){
++ if(!appearance||appearance.transmog>=0)return [];
++ return appearance.parts.flatMap((part,slot)=>{
++  if(!Number.isInteger(part)||part<512||part===65535)return [];
++  const id=part-512;let name:string|undefined;
++  try{name=resolveName(id);}catch{}
++  return [{id,slot:SLOTS[slot]??'Equipment',name:name||'Item #'+id}];
++ });
++}
+diff --git a/src/live/WatchBridge.ts b/src/live/WatchBridge.ts
+new file mode 100644
+index 0000000..6b68bcd
+--- /dev/null
++++ b/src/live/WatchBridge.ts
+@@ -0,0 +1,131 @@
++import {researchView,readLayers,layerSettings,detailFresh,rosterFresh as researchRosterFresh} from './ResearchLayers';
++import {multiCombatView,combatZoneStatus} from './MultiCombat';
++import {observedEquipment} from './ObservedEquipment';
++import {setAllegiances} from './Allegiance';
++import { MapViewer } from '../mapviewer/MapViewer';
++import { FlightLayers } from '../mapviewer/FlightLayers';
++export function installWatchBridge(viewer: MapViewer) {
++    const params = new URLSearchParams(window.location.search);
++    window.wallpaperFpsLimit = params.get('dualpane')==='1'?20:30;
++    viewer.live?.feed?.setAreaEnabled(params.get('observe')!=='0');
++    const layer=params.get('layer');
++    if(layer==='surface'||layer==='dungeons') {
++        const c=viewer.camera;
++        const next=new FlightLayers().switchTo(layer,{x:c.getPosX(),y:c.getPosY(),z:c.getPosZ(),pitch:c.pitch,yaw:c.yaw},(x,z)=>viewer.mapFileIndex.getTerrainArchiveId(x,z)!==-1);
++        if(next){viewer.live?.unfollow();if(viewer.live)viewer.live.pendingFollow=undefined;viewer.setCamera({position:[next.x,next.y,next.z],pitch:next.pitch,yaw:next.yaw});viewer.updateSearchParams();}
++    }
++    if (window.parent === window) return;
++    viewer.inputManager.embeddedScroll=true;
++    if (viewer.live && params.get('multifollow') === '1') {
++        viewer.live.onFollowRequest = name => {
++            const current = viewer.live?.followName ?? viewer.live?.pendingFollow;
++            const key = (value:string) => value.toLowerCase().replace(/[_ -]/g, '');
++            if (!params.get('monitor') && (!current || key(current) === key(name))) return false;
++            window.parent.postMessage({type:'rs-watch-follow-request',name},window.location.origin);
++            return true;
++        };
++    }
++    document.documentElement.classList.add('rs-watch-embedded');
++    document.documentElement.classList.toggle('rs-watch-native', new URLSearchParams(window.location.search).get('native') === '1');
++    const storageKey='rs-watch:orbit:'+(params.get('follow')?.toLowerCase()??params.get('monitor')??params.get('layer')??'primary');
++    researchView.settings=readLayers(storageKey+':research');
++    let saved:any=null,restored=false;
++    try{saved=JSON.parse(sessionStorage.getItem(storageKey)??'null');}catch{}
++    let roofsHidden = true;
++    try { roofsHidden = localStorage.getItem(storageKey+':roofs') !== 'false'; } catch {}
++    const requestedPlane=Number(params.get('plane')??0);
++    let roofLevel = Number.isInteger(requestedPlane)&&requestedPlane>=0&&requestedPlane<=3?requestedPlane:0;
++    try {multiCombatView.enabled=localStorage.getItem(storageKey+':multi-combat')!=='false';}catch{multiCombatView.enabled=true;}
++    const applyRoofs = () => {
++        if (!viewer.renderer?.setRoofCutaway) return;
++        const live = viewer.live;
++        const player = live?.followName ? live.world.findPlayer(live.followName) : undefined;
++        const roster = live?.followName ? live.world.rosterPlayers?.find(p=>p[1].toLowerCase()===live.followName!.toLowerCase()) : undefined;
++        // Keep the followed floor. When temporarily outside coverage retain the last known floor.
++        roofLevel = player?.level ?? roster?.[4] ?? roofLevel;
++        viewer.renderer?.setRoofCutaway?.(roofsHidden, roofLevel);
++    };
++    applyRoofs();
++    const anchor=[params.get('cx'),params.get('cz'),params.get('cy'),params.get('plane')].join(':');
++    if(params.get('monitor')&&saved?.presetVersion===4&&saved.anchor===anchor&&[saved.x,saved.z,saved.height,saved.pitch,saved.yaw].every(Number.isFinite)){
++        viewer.setCamera({position:[saved.x,-saved.height,saved.z],pitch:saved.pitch,yaw:saved.yaw});
++    }
++    let lastCommand = '';
++    window.addEventListener('message', event => {
++        if (event.origin !== window.location.origin || event.source !== window.parent) return;
++        if(event.data?.type==='rs-watch-research-data' && Array.isArray(event.data.source?.players) && Array.isArray(event.data.source?.trails)) {researchView.source=event.data.source;return;}
++        if(event.data?.type==='rs-watch-research-settings') {researchView.settings=layerSettings(event.data.settings);try{localStorage.setItem(storageKey+':research',JSON.stringify(researchView.settings));}catch{}return;}
++        if(event.data?.type==='rs-watch-multi-combat' && typeof event.data.enabled==='boolean') {
++            multiCombatView.enabled=event.data.enabled;
++            try{localStorage.setItem(storageKey+':multi-combat',String(multiCombatView.enabled));}catch{}
++            return;
++        }
++        if(event.data?.type==='rs-watch-touch-camera'&&typeof event.data.enabled==='boolean'){viewer.inputManager.touchCamera=event.data.enabled;return;}
++        if(event.data?.type==='rs-watch-roofs' && typeof event.data.hidden==='boolean') {
++            roofsHidden=event.data.hidden;
++            try { localStorage.setItem(storageKey+':roofs',String(roofsHidden)); } catch {}
++            applyRoofs();return;
++        }
++        if(event.data?.type==='rs-watch-camera-preset' &&event.data.preset==='overhead'){viewer.live?.overheadView(viewer.camera);return;}
++        if(event.data?.type==='rs-watch-view-lock'&&typeof event.data.locked==='boolean'){
++            viewer.live?.setViewLock(event.data.locked,viewer.camera);return;
++        }
++        if(event.data?.type==='rs-watch-pane-config'  && typeof event.data.active==='boolean') {
++            document.documentElement.classList.toggle('rs-watch-compact',event.data.compact===true);
++            // Explicit user focus can reclaim coverage moved by another browser tab.
++            if(event.data.active && event.data.reclaim===true)viewer.live?.feed?.setAreaEnabled(false);
++            viewer.live?.feed?.setAreaEnabled(event.data.active);
++            window.wallpaperFpsLimit=event.data.visible===false?2:event.data.dual===true?20:30;
++            // Restore the visible rate immediately instead of waiting for the next slow frame.
++            if(viewer.renderer)viewer.renderer.fpsLimit=window.wallpaperFpsLimit;
++            return;
++        }
++        if(event.data?.type==='rs-watch-allegiance' && Array.isArray(event.data.names) && event.data.names.length<50000){setAllegiances(event.data);if(viewer.live)viewer.live.version++;return;}
++        if(event.data?.type !== 'rs-watch-command')return;
++        const c = event.data.command;
++        if (!c || typeof c.id !== 'string' || c.id === lastCommand) return;
++        try {
++            if (c.kind === 'follow' && typeof c.name === 'string') {
++                viewer.live?.goToPlayer(c.name, viewer.camera, true);
++                if (viewer.live) viewer.live.pendingFollow = c.name;
++            } else if (c.kind === 'goto' && Number.isFinite(c.x) && Number.isFinite(c.z)) {
++                viewer.live?.unfollow(true);
++                roofLevel=Number.isInteger(c.plane)&&c.plane>=0&&c.plane<=3?c.plane:0;
++                applyRoofs();
++                viewer.setCamera({ position: [c.x, -(c.height ?? 70), c.z], pitch: c.pitch ?? -500, yaw: c.yaw ?? 0 });
++                viewer.renderer.canvas.focus({ preventScroll: true });
++            } else if (c.kind === 'layers' && viewer.live) {
++                for (const key of ['showPlayers','showNpcs','showPlayerNames','showNpcNames','showChat','showCombat'] as const) {
++                    if (typeof c[key] === 'boolean') viewer.live.options[key] = c[key];
++                }
++                viewer.live.version++;
++            } else throw new Error('Unsupported viewer command');
++            lastCommand = c.id;
++            window.parent.postMessage({ type:'rs-watch-ack', id:c.id, status:'applied' }, window.location.origin);
++        } catch (e) {
++            window.parent.postMessage({ type:'rs-watch-ack', id:c.id, status:'failed', error:String(e) }, window.location.origin);
++        }
++    });
++    document.addEventListener?.('pointerdown',event=>{if(event.pointerType!=='touch'||viewer.inputManager.touchCamera)window.parent.postMessage({type:'rs-watch-pane-focus'},window.location.origin);});
++    // Frame focus also occurs during touch scrolling; only explicit pointer interaction
++    // or the host's Focus details control may claim the shared observation area.
++    setInterval(() => {
++        const live=viewer.live, followed=live?.followName?live.world.findPlayer(live.followName):undefined;
++        if(params.get('monitor')&&!live?.followName)try{sessionStorage.setItem(storageKey,JSON.stringify({presetVersion:4,anchor,x:viewer.camera.getPosX(),z:viewer.camera.getPosZ(),height:-viewer.camera.getPosY(),pitch:viewer.camera.pitch,yaw:viewer.camera.yaw}));}catch{}
++        if(live?.followName&&!restored){restored=true;if(saved?.presetVersion===3&&saved?.follow?.toLowerCase()===live.followName.toLowerCase())live.restoreOrbit?.(viewer.camera,saved);}
++        if(live?.followName&&live.orbitDistance>0)try{sessionStorage.setItem(storageKey,JSON.stringify({presetVersion:3,follow:live.followName,x:viewer.camera.getPosX(),z:viewer.camera.getPosZ(),height:-viewer.camera.getPosY(),fov:viewer.camera.fov,pitch:viewer.camera.pitch,yaw:viewer.camera.yaw,orbitDistance:live.orbitDistance,locked:live.viewLocked}));}catch{}
++        applyRoofs();
++        const known=live?.followName?live.world.knownAppearance?.(live.followName):undefined;
++        const fresh=live?.status==='open' && !!live?.lastTickAt && Date.now()-live.lastTickAt<=5000;
++        const roster=live?.followName?live.world.rosterPlayers?.find(p=>p[1].toLowerCase()===live.followName!.toLowerCase()):undefined;
++        const rosterFresh=live?.status==='open'&&!!live?.lastRosterAt&&Date.now()-live.lastRosterAt<=10000;
++        const position=fresh&&followed?{x:followed.x/128,z:followed.z/128,plane:followed.level}:rosterFresh&&roster?{x:roster[2],z:roster[3],plane:roster[4]}:undefined;
++        multiCombatView.plane=position?.plane??roofLevel;
++        const area=researchView.source?.area;
++        const inside=!!area&&viewer.camera.getPosX()>=area.x&&viewer.camera.getPosX()<area.x+area.w&&viewer.camera.getPosZ()>=area.z&&viewer.camera.getPosZ()<area.z+area.h;
++        const researchCoverage=!researchRosterFresh(researchView.source)?'Stale positions':!detailFresh(researchView.source)?'Detail stale':inside?'Detail live':'Roster only';
++        window.parent.postMessage({ type:'rs-watch-camera', camera:{ touchCamera:viewer.inputManager.touchCamera,npcCoverage:researchCoverage==='Detail live'?'live':'unavailable', stream:{...live?.streamTiming?.snapshot(),detailAt:live?.lastTickAt??0,rosterAt:live?.lastRosterAt??0,error:live?.error}, researchCoverage, researchLayers:researchView.settings, combatObservedAt:Date.now(), multiCombatVisible:multiCombatView.enabled,combatZone:combatZoneStatus(position,!!position),combatPlane:multiCombatView.plane, roofsHidden,roofLevel, plane:roofLevel, x:viewer.camera.getPosX(), z:viewer.camera.getPosZ(), height:-viewer.camera.getPosY(), pitch:viewer.camera.pitch, yaw:viewer.camera.yaw, follow:live?.followName ?? live?.pendingFollow ?? null, tracking:followed?'detail':live?.followName&&live.world.rosterPlayers?.some(p=>p[1].toLowerCase()===live.followName!.toLowerCase())?'roster':'waiting',locked:live?.viewLocked===true,orbitDistance:live?.orbitDistance??0, ready:true, feed:live?.status,
++            detail:{equipment:observedEquipment(followed?.appearance??known?.appearance,id=>viewer.objTypeLoader?.load(id)?.name),headIcons:fresh&&followed?.appearance?followed.appearance.headIcons:null,lastAppearanceAt:known?.at??null,cachedAppearance:!followed?.appearance&&!!known,active:live?.feed.areaEnabled===true,fresh,appearance:fresh&&!!followed?.appearance,transformed:fresh&&!!followed?.appearance&&followed.appearance.transmog>=0,equipmentCount:fresh&&followed?.appearance?followed.appearance.parts.filter(part=>part>=512&&part!==65535).length:null}
++        } }, window.location.origin);
++    }, 1000);
++}
+diff --git a/src/live/WorldFeedClient.ts b/src/live/WorldFeedClient.ts
+index 88c2ef3..e1acc24 100644
+--- a/src/live/WorldFeedClient.ts
++++ b/src/live/WorldFeedClient.ts
+@@ -1,3 +1,4 @@
++import {needsResync} from './StreamTiming';
+ import { FeedHello, FeedMessage, FeedRoster, FeedTick } from "./protocol";
+ 
+ export type FeedStatus = "connecting" | "open" | "closed";
+@@ -21,6 +22,7 @@ export class WorldFeedClient {
+     hello?: FeedHello;
+ 
+     area?: Area;
++    areaEnabled = true;
+     roster: boolean = false;
+ 
+     bytesReceived: number = 0;
+@@ -67,6 +69,12 @@ export class WorldFeedClient {
+         this.send({ t: "roster", on });
+     }
+ 
++    setAreaEnabled(enabled: boolean): void {
++        if(this.areaEnabled===enabled)return;
++        this.areaEnabled=enabled;
++        if(enabled)this.sendArea();
++    }
++
+     private open(): void {
+         this.setStatus("connecting");
+         let ws: WebSocket;
+@@ -89,7 +97,7 @@ export class WorldFeedClient {
+         };
+ 
+         ws.onmessage = (event) => {
+-            if (typeof event.data !== "string") {
++            if (this.ws !== ws || ws.readyState !== WebSocket.OPEN || typeof event.data !== "string") {
+                 return;
+             }
+             this.bytesReceived += event.data.length;
+@@ -100,6 +108,12 @@ export class WorldFeedClient {
+             } catch {
+                 return;
+             }
++            // Never discard a delta and keep going: restart from the relay snapshot.
++            if ((msg.t === 'tick' || msg.t === 'roster') && needsResync(msg)) {
++                this.setStatus('closed', 'Catching up from a fresh snapshot');
++                ws.close(4000, 'Resync delayed feed');
++                return;
++            }
+             switch (msg.t) {
+                 case "hello":
+                     this.hello = msg;
+@@ -139,7 +153,7 @@ export class WorldFeedClient {
+     }
+ 
+     private sendArea(): void {
+-        if (this.area) {
++        if (this.area && this.areaEnabled) {
+             this.send({ t: "sub", ...this.area });
+         }
+     }
+diff --git a/src/live/protocol.ts b/src/live/protocol.ts
+index 3fcd602..6b611b2 100644
+--- a/src/live/protocol.ts
++++ b/src/live/protocol.ts
+@@ -53,6 +53,9 @@ export type FeedTick = {
+     t: "tick";
+     k: number;
+     ms: number;
++    // Local relay snapshots retain the source receipt time instead of renewing freshness.
++    relayObservedAt?: number;
++    relaySnapshot?: boolean;
+     reset?: number;
+     p?: FeedEntity[];
+     n?: FeedEntity[];
+@@ -68,6 +71,14 @@ export type FeedRoster = {
+     k: number;
+     p: RosterPlayer[];
+     npcs: number;
++    relayObservedAt?: number;
++    relaySnapshot?: boolean;
+ };
+ 
++export function feedObservationTime(message: {relayObservedAt?: number}, now = Date.now()): number {
++    if (message.relayObservedAt === undefined) return now;
++    const at = message.relayObservedAt;
++    return typeof at === 'number' && Number.isFinite(at) && at > 0 ? Math.min(at, now) : 0;
++}
++
+ export type FeedMessage = FeedHello | FeedTick | FeedRoster;
+diff --git a/src/mapviewer/AtlasManifest.ts b/src/mapviewer/AtlasManifest.ts
+new file mode 100644
+index 0000000..4481860
+--- /dev/null
++++ b/src/mapviewer/AtlasManifest.ts
+@@ -0,0 +1,18 @@
++import { AtlasArea } from "../components/rs/worldmap/WorldMapTiles";
++export function parseAtlasManifest(value: any, cacheName: string): {urls: Map<number,string>; areas: AtlasArea[]} {
++    if (!value || value.format !== 1 || value.complete !== true || value.plane !== 0 || value.cacheName !== cacheName ||
++        typeof value.version !== "string" || !/^[a-f0-9]{16}$/.test(value.version) || !Array.isArray(value.tiles) || value.tiles.length > 20000 ||
++        !Array.isArray(value.areas) || value.areas.length > 10) throw Error("Atlas does not match the loaded game cache");
++    const urls = new Map<number,string>();
++    for (const id of value.tiles) {
++        const x = id >> 8, y = id & 255;
++        if (!Number.isInteger(id) || id < 0 || id >= 100 * 256 || x >= 100 || y >= 200 || urls.has(id)) throw Error("Invalid atlas tile");
++        urls.set(id, `/viewer/atlas/${value.version}/${x}_${y}.png`);
++    }
++    const areas: AtlasArea[] = value.areas.map((a:any) => {
++        if (!a || typeof a.id !== "string" || typeof a.label !== "string" || a.label.length > 40 ||
++            ![a.minX,a.maxX,a.minY,a.maxY].every(Number.isFinite) || a.minX < 0 || a.minY < 0 || a.maxX > 6400 || a.maxY > 12800 || a.minX >= a.maxX || a.minY >= a.maxY) throw Error("Invalid atlas area");
++        return {id:a.id,label:a.label,minX:a.minX,maxX:a.maxX,minY:a.minY,maxY:a.maxY};
++    });
++    return {urls,areas};
++}
+diff --git a/src/mapviewer/FlightLayerControls.tsx b/src/mapviewer/FlightLayerControls.tsx
+new file mode 100644
+index 0000000..6ae501d
+--- /dev/null
++++ b/src/mapviewer/FlightLayerControls.tsx
+@@ -0,0 +1,42 @@
++import { useEffect, useRef, useState } from "react";
++import { FlightLayers, flightLayer, FlightLayer } from "./FlightLayers";
++import { MapViewer } from "./MapViewer";
++
++export function FlightLayerControls({ mapViewer }: { mapViewer: MapViewer }): JSX.Element {
++    const history = useRef(new FlightLayers());
++    const [layer, setLayer] = useState(() => flightLayer(mapViewer.camera.getPosZ()));
++    const [notice, setNotice] = useState("");
++    useEffect(() => {
++        const timer = window.setInterval(() => setLayer(flightLayer(mapViewer.camera.getPosZ())), 250);
++        return () => window.clearInterval(timer);
++    }, [mapViewer]);
++    function switchLayer(target: FlightLayer) {
++        const camera = mapViewer.camera;
++        const next = history.current.switchTo(target, {
++            x: camera.getPosX(), y: camera.getPosY(), z: camera.getPosZ(),
++            pitch: camera.pitch, yaw: camera.yaw,
++        }, (x, z) => mapViewer.mapFileIndex.getTerrainArchiveId(x, z) !== -1);
++        if (!next) {
++            setNotice(flightLayer(camera.getPosZ()) === target ? "" : "No mapped terrain available");
++            return;
++        }
++        mapViewer.live?.unfollow();
++        if (mapViewer.live) mapViewer.live.pendingFollow = undefined;
++        mapViewer.setCamera({ position: [next.x, next.y, next.z], pitch: next.pitch, yaw: next.yaw });
++        mapViewer.updateSearchParams();
++        setLayer(target);
++        setNotice("");
++        mapViewer.renderer.canvas.focus({ preventScroll: true });
++    }
++    return <div className="flight-layers">
++        <div role="group" aria-label="3D map layer">
++            <button type="button" aria-pressed={layer === "surface"}
++                title="Return to your last surface view, or the nearest mapped surface area"
++                onClick={() => switchLayer("surface")}>↑ Surface</button>
++            <button type="button" aria-pressed={layer === "dungeons"}
++                title="Return to your last dungeon view, or the nearest mapped underground area"
++                onClick={() => switchLayer("dungeons")}>↓ Dungeons</button>
++        </div>
++        <small role="status">{notice || "Fly camera · remembers each view"}</small>
++    </div>;
++}
+diff --git a/src/mapviewer/FlightLayers.ts b/src/mapviewer/FlightLayers.ts
+new file mode 100644
+index 0000000..7c266f4
+--- /dev/null
++++ b/src/mapviewer/FlightLayers.ts
+@@ -0,0 +1,41 @@
++export type FlightLayer = "surface" | "dungeons";
++export type FlightView = { x: number; y: number; z: number; pitch: number; yaw: number };
++
++export function flightLayer(z: number): FlightLayer {
++    return z >= 6400 ? "dungeons" : "surface";
++}
++
++/** Spectator destinations, not entrances or game travel routes. */
++export class FlightLayers {
++    private saved: Partial<Record<FlightLayer, FlightView>> = {};
++
++    switchTo(layer: FlightLayer, current: FlightView,
++        hasTerrain: (mapX: number, mapZ: number) => boolean): FlightView | undefined {
++        if (flightLayer(current.z) === layer) return undefined;
++        let next = this.saved[layer];
++        if (!next) {
++            const z = current.z + (layer === "dungeons" ? 6400 : -6400);
++            next = { ...current, z };
++            if (!hasTerrain(Math.floor(next.x / 64), Math.floor(z / 64))) {
++                let distance = Infinity;
++                let nearest: FlightView | undefined;
++                for (let mapX = 0; mapX < 100; mapX++) {
++                    for (let mapZ = layer === "dungeons" ? 100 : 0;
++                        mapZ < (layer === "dungeons" ? 200 : 100); mapZ++) {
++                        if (!hasTerrain(mapX, mapZ)) continue;
++                        const x = mapX * 64 + 32, candidateZ = mapZ * 64 + 32;
++                        const d = (x - current.x) ** 2 + (candidateZ - z) ** 2;
++                        if (d < distance) {
++                            distance = d;
++                            nearest = { ...current, x, z: candidateZ };
++                        }
++                    }
++                }
++                if (!nearest) return undefined;
++                next = nearest;
++            }
++        }
++        this.saved[flightLayer(current.z)] = { ...current };
++        return { ...next };
++    }
++}
+diff --git a/src/mapviewer/InputManager.ts b/src/mapviewer/InputManager.ts
+index b212bf1..72cd51e 100644
+--- a/src/mapviewer/InputManager.ts
++++ b/src/mapviewer/InputManager.ts
+@@ -1,4 +1,5 @@
+ import { vec2 } from "gl-matrix";
++import {wheelIntent} from './EmbeddedScroll';
+ import { IJoystickUpdateEvent } from "react-joystick-component/build/lib/Joystick";
+ 
+ export function getMousePos(container: HTMLElement, event: MouseEvent | Touch): vec2 {
+@@ -40,6 +41,9 @@ export class InputManager {
+ 
+     // Accumulated wheel scroll (pixels, positive = towards the user) since the last read.
+     wheelDelta: number = 0;
++    embeddedScroll = false;
++    touchCamera = false;
++    private scrollTouch: {x:number;y:number}|undefined;
+ 
+     // Right-button drag pans the camera. A right click that doesn't move opens the menu on release.
+     panX: number = -1;
+@@ -49,6 +53,7 @@ export class InputManager {
+     private panMoved: boolean = false;
+ 
+     isTouch: boolean = false;
++    private pinchDistance = 0;
+ 
+     pickX: number = -1;
+     pickY: number = -1;
+@@ -59,11 +64,12 @@ export class InputManager {
+     gamepadIndex?: number;
+ 
+     init(element: HTMLElement) {
+-        if (!this.element) {
++        if (this.element) {
+             this.cleanUp();
+         }
+         this.element = element;
+ 
++        window.addEventListener("blur", this.onFocusOut);
+         window.addEventListener("gamepadconnected", this.onGamepadConnected);
+         window.addEventListener("gamepaddisconnected", this.onGamepadDisconnected);
+ 
+@@ -94,6 +100,7 @@ export class InputManager {
+             return;
+         }
+ 
++        window.removeEventListener("blur", this.onFocusOut);
+         window.removeEventListener("gamepadconnected", this.onGamepadConnected);
+         window.removeEventListener("gamepaddisconnected", this.onGamepadDisconnected);
+ 
+@@ -127,13 +134,18 @@ export class InputManager {
+     }
+ 
+     private onWheel = (event: WheelEvent) => {
++        const intent=wheelIntent(event,this.embeddedScroll);
++        if(intent.kind==='browser')return;
+         event.preventDefault();
+-        const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
+-        this.wheelDelta += event.deltaY * scale;
++        if(intent.kind==='scroll'){
++            window.parent.postMessage({type:'rs-watch-scroll',deltaX:intent.x,deltaY:intent.y},window.location.origin);
++            return;
++        }
++        this.wheelDelta = Math.max(-120,Math.min(120,this.wheelDelta+intent.y));
+     };
+ 
+     isShiftDown(): boolean {
+-        return this.isKeyDown("ShiftLeft") || this.isKeyDown("ShiftRight");
++        return this.isKeyDown("ShiftModifier") || this.isKeyDown("ShiftLeft") || this.isKeyDown("ShiftRight");
+     }
+ 
+     isKeyDown(key: string): boolean {
+@@ -218,13 +230,25 @@ export class InputManager {
+         }
+     };
+ 
++    // Shift may already be held when focus enters the canvas; its keydown was elsewhere.
++    private syncShift(held: boolean) {
++        if (held) this.keys.set("ShiftModifier", true);
++        else {
++            this.keys.delete("ShiftModifier");
++            this.keys.delete("ShiftLeft");
++            this.keys.delete("ShiftRight");
++        }
++    }
++
+     private onKeyDown = (event: KeyboardEvent) => {
+         event.preventDefault();
++        this.syncShift(event.shiftKey);
+         this.keys.set(event.code, true);
+     };
+ 
+     private onKeyUp = (event: KeyboardEvent) => {
+         event.preventDefault();
++        this.syncShift(event.shiftKey);
+         this.keys.delete(event.code);
+     };
+ 
+@@ -232,6 +256,8 @@ export class InputManager {
+         if (!this.element) {
+             return;
+         }
++        this.element.focus({ preventScroll: true });
++        this.syncShift(event.shiftKey);
+         const [x, y] = getMousePos(this.element, event);
+         if (event.button === 2) {
+             this.panX = this.panStartX = x;
+@@ -291,30 +317,51 @@ export class InputManager {
+ 
+     private onTouchStart = (event: TouchEvent) => {
+         event.preventDefault();
+-        if (!this.element) {
++        if (!this.element || !event.touches.length) return;
++        this.isTouch = true;
++        this.scrollTouch=this.embeddedScroll&&!this.touchCamera&&event.touches.length===1?{x:event.touches[0].clientX,y:event.touches[0].clientY}:undefined;
++        if(this.scrollTouch){this.dragX=this.dragY=-1;return;}
++        if (event.touches.length >= 2) {
++            const [a,b] = [event.touches[0],event.touches[1]];
++            this.pinchDistance = Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
++            this.dragX = this.dragY = -1;
+             return;
+         }
+-        const [x, y] = getMousePos(this.element, event.touches[0]);
+-        this.dragX = x;
+-        this.dragY = y;
+-        this.mouseX = x;
+-        this.mouseY = y;
+-        this.isTouch = true;
++        this.pinchDistance = 0;
++        const [x,y] = getMousePos(this.element,event.touches[0]);
++        this.dragX = this.mouseX = x;
++        this.dragY = this.mouseY = y;
+     };
+ 
+     private onTouchMove = (event: TouchEvent) => {
+         event.preventDefault();
+-        if (!this.element) {
++        if (!this.element || !event.touches.length) return;
++        if(this.scrollTouch&&event.touches.length===1){
++            const touch=event.touches[0];
++            window.parent.postMessage({type:'rs-watch-scroll',deltaX:this.scrollTouch.x-touch.clientX,deltaY:this.scrollTouch.y-touch.clientY},window.location.origin);
++            this.scrollTouch={x:touch.clientX,y:touch.clientY};return;
++        }
++        this.scrollTouch=undefined;
++        if (event.touches.length >= 2) {
++            const [a,b] = [event.touches[0],event.touches[1]];
++            const distance = Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
++            // Spreading fingers zooms in, using the same bounded zoom path as the wheel.
++            if (this.pinchDistance > 0) this.wheelDelta += (this.pinchDistance-distance)*3;
++            this.pinchDistance = distance;
++            this.dragX = this.dragY = -1;
+             return;
+         }
+-        const [x, y] = getMousePos(this.element, event.touches[0]);
++        if (this.pinchDistance > 0) { this.onTouchStart(event); return; }
++        const [x,y] = getMousePos(this.element,event.touches[0]);
+         this.mouseX = x;
+         this.mouseY = y;
+     };
+ 
+     private onTouchEnd = (event: TouchEvent) => {
+-        this.dragX = -1;
+-        this.dragY = -1;
++        this.scrollTouch=undefined;
++        this.pinchDistance = 0;
++        this.dragX = this.dragY = -1;
++        if (event.type !== 'touchcancel' && event.touches.length) this.onTouchStart(event);
+     };
+ 
+     private onContextMenu = (event: MouseEvent) => {
+@@ -345,6 +392,8 @@ export class InputManager {
+     };
+ 
+     resetMouse() {
++        this.pinchDistance = 0;
++        this.wheelDelta = 0;
+         this.mouseX = -1;
+         this.mouseY = -1;
+         this.dragX = -1;
+@@ -357,7 +406,7 @@ export class InputManager {
+         for (const key of this.keys.keys()) {
+             this.keys.set(key, false);
+         }
+-        if (this.isDragging() && !this.isTouch) {
++        if (this.isDragging()) {
+             this.dragX = this.mouseX;
+             this.dragY = this.mouseY;
+         }
+diff --git a/src/mapviewer/MapManager.ts b/src/mapviewer/MapManager.ts
+index edb0229..bcfd3bb 100644
+--- a/src/mapviewer/MapManager.ts
++++ b/src/mapviewer/MapManager.ts
+@@ -242,7 +242,7 @@ export class MapManager<T extends MapSquare> {
+     }
+ 
+     cleanUp(): void {
+-        this.renderBounds.fill(-1);
++        for (let i = 0; i < 4; i++) this.renderBounds[i] = -1;
+         this.clearMaps();
+     }
+ }
+diff --git a/src/mapviewer/MapViewer.ts b/src/mapviewer/MapViewer.ts
+index 42702f7..4369c6f 100644
+--- a/src/mapviewer/MapViewer.ts
++++ b/src/mapviewer/MapViewer.ts
+@@ -1,3 +1,5 @@
++import {parseAtlasManifest} from "./AtlasManifest";
++import {AtlasArea} from "../components/rs/worldmap/WorldMapTiles";
+ import { vec3 } from "gl-matrix";
+ import { URLSearchParamsInit } from "react-router-dom";
+ 
+@@ -30,7 +32,7 @@ const CACHED_MAP_IMAGE_PREFIX = "/map-images/";
+ 
+ export class MapViewer {
+     inputManager: InputManager = new InputManager();
+-    camera: Camera = new Camera(3242, -26, 3202, -245, 1862);
++    camera: Camera = new Camera(3242, -32, 3202, -500, 0);
+ 
+     pathfinder: Pathfinder = new Pathfinder();
+ 
+@@ -81,8 +83,11 @@ export class MapViewer {
+     debugText?: string;
+ 
+     mapImageUrls: Map<number, string> = new Map();
++    private atlasImageUrls?: Map<number, string>;
++    atlasAreas: AtlasArea[] = [];
+     minimapImageUrls: Map<number, string> = new Map();
+     loadingMapImageIds: Set<number> = new Set();
++    private mapImageRetryAt: Map<number, number> = new Map();
+ 
+     cameraSpeed: number = 1;
+ 
+@@ -195,6 +200,7 @@ export class MapViewer {
+     }
+ 
+     init(): void {
++        void this.loadAtlasManifest();
+         this.workerPool.loadCachedMapImages().then((mapImageUrls) => {
+             mapImageUrls.forEach((value, key) => this.mapImageUrls.set(key, value));
+         });
+@@ -249,6 +255,7 @@ export class MapViewer {
+                 this.live.pendingFollow = this.followParam;
+             }
+             this.live.hitmarkSprites = this.loaderFactory.getHitmarkSprites?.() ?? [];
++            this.live.headIconSprites = this.loaderFactory.getHeadIconSprites?.() ?? [];
+         }
+         // Live npcs replace the static spawn list; without a feed, fall back to it.
+         this.renderer.setLoadNpcs?.(!this.live);
+@@ -320,17 +327,30 @@ export class MapViewer {
+         this.workerPool.setVars(this.varManager.values);
+     }
+ 
++    private async loadAtlasManifest(): Promise<void> {
++        const cacheName = this.loadedCache.info.name;
++        try {
++            const response = await fetch("/viewer/atlas/manifest.json");
++            if (!response.ok) return; // Standalone upstream viewer keeps its worker fallback.
++            const atlas = parseAtlasManifest(await response.json(), cacheName);
++            if (this.loadedCache.info.name !== cacheName) return;
++            this.atlasImageUrls = atlas.urls;
++            this.atlasAreas = atlas.areas;
++        } catch (error) { console.warn("Local atlas unavailable; using terrain worker", error); }
++    }
++
+     static getCachedMapImageUrl(mapX: number, mapY: number): string {
+         return CACHED_MAP_IMAGE_PREFIX + `${mapX}_${mapY}.png`;
+     }
+ 
+-    async queueLoadMapImage(mapX: number, mapY: number) {
++    queueLoadMapImage(mapX: number, mapY: number): void {
+         const mapManager = this.renderer.mapManager;
+         const mapId = getMapSquareId(mapX, mapY);
+         if (
+             this.loadingMapImageIds.size > this.workerPool.size * 4 ||
+             this.mapImageUrls.has(mapId) ||
+             this.loadingMapImageIds.has(mapId) ||
++            (this.mapImageRetryAt.get(mapId) ?? 0) > Date.now() ||
+             mapManager.invalidMapIds.has(mapId) ||
+             mapManager.loadingMapIds.has(mapId)
+         ) {
+@@ -338,15 +358,20 @@ export class MapViewer {
+         }
+         this.loadingMapImageIds.add(mapId);
+ 
+-        const minimapData = await this.workerPool.queueMapImage(mapX, mapY, 0, true);
+-        if (minimapData) {
+-            const url = URL.createObjectURL(minimapData.minimapBlob);
+-            this.setMapImageUrl(mapX, mapY, url, false);
+-        } else {
+-            mapManager.invalidMapIds.add(mapId);
+-        }
+-
+-        this.loadingMapImageIds.delete(mapId);
++        void this.workerPool.queueMapImage(mapX, mapY, 0, true).then(minimapData => {
++            if (minimapData) {
++                this.mapImageRetryAt.delete(mapId);
++                const url = URL.createObjectURL(minimapData.minimapBlob);
++                this.setMapImageUrl(mapX, mapY, url, false);
++            } else {
++                mapManager.invalidMapIds.add(mapId);
++            }
++        }).catch(error => {
++            console.warn("Unable to render atlas tile", mapX, mapY, error);
++            // Retry transient failures without flooding the worker or invalidating
++            // the same square in the independent 3D terrain renderer.
++            this.mapImageRetryAt.set(mapId, Date.now() + 5000);
++        }).finally(() => this.loadingMapImageIds.delete(mapId));
+     }
+ 
+     getMapImageUrl(mapX: number, mapY: number, minimap: boolean): string | undefined {
+@@ -354,13 +379,18 @@ export class MapViewer {
+             return undefined;
+         }
+         const urls = minimap ? this.minimapImageUrls : this.mapImageUrls;
++        const mapId = getMapSquareId(mapX, mapY);
++        // A complete atlas includes every cache region, including dungeons. Missing
++        // entries are actual void, not more work for the shared 3D render worker.
++        if (!minimap && this.atlasImageUrls) return this.atlasImageUrls.get(mapId);
++        const cached = urls.get(mapId);
++        if (cached) return cached;
+         if (minimap) {
+             this.renderer.mapManager.loadMap(mapX, mapY);
+         } else {
+             this.queueLoadMapImage(mapX, mapY);
+         }
+-        const mapId = getMapSquareId(mapX, mapY);
+-        return urls.get(mapId);
++        return undefined;
+     }
+ 
+     setMapImageUrl(
+@@ -401,5 +431,8 @@ export class MapViewer {
+         this.mapImageUrls.clear();
+         this.minimapImageUrls.clear();
+         this.loadingMapImageIds.clear();
++        this.mapImageRetryAt.clear();
++        this.atlasImageUrls = undefined;
++        this.atlasAreas = [];
+     }
+ }
+diff --git a/src/mapviewer/MapViewerApp.tsx b/src/mapviewer/MapViewerApp.tsx
+index b66e4c6..425e48c 100644
+--- a/src/mapviewer/MapViewerApp.tsx
++++ b/src/mapviewer/MapViewerApp.tsx
+@@ -1,3 +1,4 @@
++import { installWatchBridge } from "../live/WatchBridge";
+ import { useEffect, useState } from "react";
+ import { useSearchParams } from "react-router-dom";
+ import { registerSerializer } from "threads";
+@@ -27,7 +28,7 @@ const cachesPromise = fetchCacheList();
+ 
+ // Without shared memory each worker receives its own copy of the cache.
+ const workerPool = RenderDataWorkerPool.create(
+-    isWallpaperEngine || !isSharedMemorySupported ? 1 : isTouchDevice ? 2 : 4,
++    1,
+ );
+ 
+ function MapViewerApp() {
+@@ -64,6 +65,7 @@ function MapViewerApp() {
+             const mapViewer = new MapViewer(workerPool, npcSpawns, mapImageCache, cache);
+             mapViewer.applySearchParams(searchParams);
+             mapViewer.init();
++            installWatchBridge(mapViewer);
+ 
+             setDownloadProgress(undefined);
+             setMapViewer(mapViewer);
+diff --git a/src/mapviewer/MapViewerContainer.css b/src/mapviewer/MapViewerContainer.css
+index 560f3be..ab20389 100644
+--- a/src/mapviewer/MapViewerContainer.css
++++ b/src/mapviewer/MapViewerContainer.css
+@@ -11,6 +11,17 @@
+     position: absolute;
+     padding: 10px;
+ }
++
++.flight-layers { width:181px; margin-top:8px; padding:5px; box-sizing:border-box;
++    border:1px solid #ffffff24; border-radius:10px; background:#121923ed;
++    font:11px Inter,-apple-system,sans-serif; color:#dce8fb; }
++.flight-layers>div { display:flex; gap:3px; }
++.flight-layers button { flex:1; padding:8px 3px; border:1px solid transparent;
++    border-radius:7px; background:transparent; color:inherit; font:inherit; cursor:pointer; }
++.flight-layers button[aria-pressed=true] { background:#8db9ff25; border-color:#8db9ff60; color:#eaf3ff; }
++.flight-layers button:hover { background:#ffffff18; }
++.flight-layers button:focus-visible { outline:2px solid #b3d1ff; outline-offset:1px; }
++.flight-layers small { display:block; padding:5px 1px 1px; font-size:9px; text-align:center; color:#9badc7; }
+ .hud.right-top {
+     position: absolute;
+     padding: 10px;
+diff --git a/src/mapviewer/MapViewerContainer.tsx b/src/mapviewer/MapViewerContainer.tsx
+index 88a5df9..8296b09 100644
+--- a/src/mapviewer/MapViewerContainer.tsx
++++ b/src/mapviewer/MapViewerContainer.tsx
+@@ -1,3 +1,4 @@
++import {playerColor,playerVisible} from '../live/Allegiance';
+ import { useCallback, useEffect, useRef, useState } from "react";
+ import { Joystick } from "react-joystick-component";
+ import { useSearchParams } from "react-router-dom";
+@@ -13,6 +14,7 @@ import { LivePanel } from "../live/LivePanel";
+ import { RS_TO_DEGREES } from "../rs/MathConstants";
+ import { isMobileDevice, isTouchDevice } from "../util/DeviceUtil";
+ import { MapViewer } from "./MapViewer";
++import { FlightLayerControls } from "./FlightLayerControls";
+ import "./MapViewerContainer.css";
+ import { MapViewerControls } from "./MapViewerControls";
+ import { MapViewerRenderer } from "./MapViewerRenderer";
+@@ -47,10 +49,29 @@ export function MapViewerContainer({ mapViewer }: MapViewerContainerProps): JSX.
+     const renderer = mapViewer.renderer;
+ 
+     const [hideUi, setHideUi] = useState(false);
++    const [nativeUi, setNativeUi] = useState(() => window.parent === window || new URLSearchParams(window.location.search).get('native') === '1');
++    useEffect(() => {
++        document.documentElement.classList.toggle('rs-watch-native', nativeUi);
++    }, [nativeUi]);
+     const [fps, setFps] = useState(0);
+     const [cameraYaw, setCameraYaw] = useState(mapViewer.camera.getYaw());
+     const [isWorldMapOpen, setWorldMapOpen] = useState<boolean>(false);
+ 
++    // The host can open the actual native terrain atlas; no replacement coordinate map.
++    useEffect(() => {
++        function onNativeUi(event: MessageEvent) {
++            if (event.origin !== window.location.origin || event.source !== window.parent || event.data?.type !== 'rs-watch-native-ui') return;
++            if (event.data.action === 'focus') renderer.canvas.focus({ preventScroll: true });
++            if (event.data.action === 'chrome' && typeof event.data.open === 'boolean') setNativeUi(event.data.open);
++            if (event.data.action === 'worldmap' && typeof event.data.open === 'boolean') setWorldMapOpen(event.data.open);
++        }
++        window.addEventListener('message', onNativeUi);
++        return () => window.removeEventListener('message', onNativeUi);
++    }, []);
++    useEffect(() => {
++        if (window.parent !== window) window.parent.postMessage({type:'rs-watch-native-state',worldMapOpen:isWorldMapOpen},window.location.origin);
++    }, [isWorldMapOpen]);
++
+     const [menuProps, setMenuProps] = useState<OsrsMenuProps | undefined>(undefined);
+ 
+     const requestRef = useRef<number | undefined>();
+@@ -139,12 +160,14 @@ export function MapViewerContainer({ mapViewer }: MapViewerContainerProps): JSX.
+         if (live) {
+             const followed = live.followName?.toLowerCase();
+             for (const [slot, name, x, z, level, combat] of live.world.rosterPlayers) {
++                if (!playerVisible(name)) continue;
+                 markers.push({
+                     key: "p" + slot,
+                     x,
+                     y: z,
++                    plane:level,
+                     label: `${name} (level-${combat})${level > 0 ? `, floor ${level}` : ""}`,
+-                    color: name.toLowerCase() === followed ? "#ff981f" : "#ffffff",
++                    color: playerColor(name),
+                 });
+             }
+         }
+@@ -173,6 +196,8 @@ export function MapViewerContainer({ mapViewer }: MapViewerContainerProps): JSX.
+         [mapViewer, closeWorldMap],
+     );
+ 
++    const getAtlasAreas = useCallback(() => mapViewer.atlasAreas, [mapViewer]);
++
+     const loadMapImageUrl = useCallback(
+         (mapX: number, mapY: number) => {
+             return mapViewer.getMapImageUrl(mapX, mapY, false);
+@@ -193,7 +218,7 @@ export function MapViewerContainer({ mapViewer }: MapViewerContainerProps): JSX.
+ 
+             {menuProps && <OsrsMenu {...menuProps} />}
+ 
+-            <MapViewerControls renderer={renderer} hideUi={hideUi} setHideUi={setHideUi} />
++            <MapViewerControls renderer={renderer} hideUi={hideUi} setHideUi={setHideUi} nativeUi={nativeUi} />
+ 
+             {!hideUi && (
+                 <span>
+@@ -206,6 +231,7 @@ export function MapViewerContainer({ mapViewer }: MapViewerContainerProps): JSX.
+                             loadMapImageUrl={loadMinimapImageUrl}
+                         />
+ 
++                        <FlightLayerControls mapViewer={mapViewer} />
+                         <div className="fps-counter content-text">{fps}</div>
+                         <div className="fps-counter content-text">{mapViewer.debugText}</div>
+                     </div>
+@@ -216,6 +242,7 @@ export function MapViewerContainer({ mapViewer }: MapViewerContainerProps): JSX.
+                     <WorldMapModal
+                         isOpen={isWorldMapOpen}
+                         onRequestClose={closeWorldMap}
++                        getAtlasAreas={getAtlasAreas}
+                         onDoubleClick={onMapClicked}
+                         getPosition={getMapPosition}
+                         loadMapImageUrl={loadMapImageUrl}
+diff --git a/src/mapviewer/MapViewerControls.tsx b/src/mapviewer/MapViewerControls.tsx
+index 42cee05..2c108e9 100644
+--- a/src/mapviewer/MapViewerControls.tsx
++++ b/src/mapviewer/MapViewerControls.tsx
+@@ -12,12 +12,19 @@ import { MapViewerRenderer } from "./MapViewerRenderer";
+ interface MapViewerControlsProps {
+     renderer: MapViewerRenderer;
+     hideUi: boolean;
++    nativeUi: boolean;
+     setHideUi: (hideUi: boolean | ((hideUi: boolean) => boolean)) => void;
+ }
+ 
+ export const MapViewerControls = memo(
+-    ({ renderer, hideUi: hidden, setHideUi }: MapViewerControlsProps): JSX.Element => {
++    ({ renderer, hideUi: hidden, setHideUi, nativeUi }: MapViewerControlsProps): JSX.Element => {
+         const mapViewer = renderer.mapViewer;
++        const [narrowViewport, setNarrowViewport] = useState(() => window.innerWidth < 700);
++        useEffect(() => {
++            const update = () => setNarrowViewport(window.innerWidth < 700);
++            window.addEventListener('resize', update);
++            return () => window.removeEventListener('resize', update);
++        }, []);
+ 
+         const [projectionType, setProjectionType] = useState<ProjectionType>(
+             mapViewer.camera.projectionType,
+@@ -25,7 +32,7 @@ export const MapViewerControls = memo(
+ 
+         const positionControls = isTouchDevice
+             ? "Left joystick, Drag up and down."
+-            : "WASD,\nR or E (up),\nF or C (down),\nUse SHIFT to go faster, or TAB to go slower.";
++            : "WASD,\nR or E (up),\nF or C (down),\nHold SHIFT for 10x speed, or TAB to go slower.";
+         const directionControls = isTouchDevice
+             ? "Right joystick."
+             : "Arrow Keys or Click and Drag. Double click for pointerlock.";
+@@ -272,7 +279,7 @@ export const MapViewerControls = memo(
+                 titleBar={{ filter: false }}
+                 collapsed={true}
+                 hideCopyButton={true}
+-                hidden={hidden || isMobileDevice}
++                hidden={hidden || isMobileDevice || narrowViewport || (window.parent !== window && !nativeUi)}
+             />
+         );
+     },
+diff --git a/src/mapviewer/MapViewerRenderer.ts b/src/mapviewer/MapViewerRenderer.ts
+index c50ff17..aad7603 100644
+--- a/src/mapviewer/MapViewerRenderer.ts
++++ b/src/mapviewer/MapViewerRenderer.ts
+@@ -61,6 +61,7 @@ export abstract class MapViewerRenderer<T extends MapSquare = MapSquare> extends
+     queueLoadMap(mapX: number, mapY: number): void {}
+ 
+     setLoadNpcs?(enabled: boolean): void;
++    setRoofCutaway?(hidden: boolean, level: number): void;
+ 
+     handleInput(deltaTime: number) {
+         this.handleKeyInput(deltaTime);
+@@ -183,12 +184,8 @@ export abstract class MapViewerRenderer<T extends MapSquare = MapSquare> extends
+         const deltaMouseY = inputManager.getDeltaMouseY();
+ 
+         if (deltaMouseX !== 0 || deltaMouseY !== 0) {
+-            if (inputManager.isTouch) {
+-                camera.move(0, clamp(-deltaMouseY, -100, 100) * 0.004, 0);
+-            } else {
+-                camera.updatePitch(camera.pitch, deltaMouseY * 0.9);
+-                camera.updateYaw(camera.yaw, deltaMouseX * -0.9);
+-            }
++            camera.updatePitch(camera.pitch, deltaMouseY * 0.9);
++            camera.updateYaw(camera.yaw, deltaMouseX * -0.9);
+         }
+ 
+         const panX = inputManager.getPanDeltaX();
+diff --git a/src/mapviewer/webgl/WebGLMapViewerRenderer.ts b/src/mapviewer/webgl/WebGLMapViewerRenderer.ts
+index 178b3de..cc5987d 100644
+--- a/src/mapviewer/webgl/WebGLMapViewerRenderer.ts
++++ b/src/mapviewer/webgl/WebGLMapViewerRenderer.ts
+@@ -154,6 +154,8 @@ export class WebGLMapViewerRenderer extends MapViewerRenderer<WebGLMapSquare> {
+ 
+     // Settings
+     maxLevel: number = Scene.MAX_LEVELS - 1;
++    hideRoofs = false;
++    private fullBuildingLevel = Scene.MAX_LEVELS - 1;
+ 
+     skyColor: vec4 = vec4.fromValues(0, 0, 0, 1);
+     fogDepth: number = 16;
+@@ -652,6 +654,7 @@ export class WebGLMapViewerRenderer extends MapViewerRenderer<WebGLMapSquare> {
+             mapX,
+             mapY,
+             maxLevel: this.maxLevel,
++            hideRoofs: this.hideRoofs,
+             loadNpcs: this.loadNpcs,
+             smoothTerrain: this.smoothTerrain,
+             minimizeDrawCalls: !this.hasMultiDraw,
+@@ -715,6 +718,7 @@ export class WebGLMapViewerRenderer extends MapViewerRenderer<WebGLMapSquare> {
+         return (
+             mapData.cacheName === this.mapViewer.loadedCache.info.name &&
+             mapData.maxLevel === this.maxLevel &&
++            mapData.hideRoofs === this.hideRoofs &&
+             mapData.loadNpcs === this.loadNpcs &&
+             mapData.smoothTerrain === this.smoothTerrain
+         );
+@@ -725,6 +729,15 @@ export class WebGLMapViewerRenderer extends MapViewerRenderer<WebGLMapSquare> {
+         this.mapsToLoad.clear();
+     }
+ 
++    setRoofCutaway(hidden: boolean, level: number): void {
++        if (hidden && !this.hideRoofs) this.fullBuildingLevel = this.maxLevel;
++        const nextLevel = hidden ? Math.max(0, Math.min(3, Math.floor(level))) : this.fullBuildingLevel;
++        if (this.hideRoofs === hidden && this.maxLevel === nextLevel) return;
++        this.hideRoofs = hidden;
++        this.maxLevel = nextLevel;
++        this.clearMaps();
++    }
++
+     setMaxLevel(maxLevel: number): void {
+         const updated = this.maxLevel !== maxLevel;
+         this.maxLevel = maxLevel;
+@@ -1034,11 +1047,12 @@ export class WebGLMapViewerRenderer extends MapViewerRenderer<WebGLMapSquare> {
+                 2,
+             )}ms\n JS: ${this.timer.cpuTime.toFixed(2)}ms`;
+         }
++        this.mapViewer.live?.streamTiming.drawn();
+     }
+ 
+     drawBound = (drawCall: DrawCall, drawRanges: number[][]) => this.draw(drawCall, drawRanges);
+ 
+-    getLiveGroundY = (e: LiveEntity): number | undefined => {
++    getLiveGroundY = (e: Pick<LiveEntity,'x'|'z'|'level'>): number | undefined => {
+         return this.liveRenderer?.getGroundHeight(e.level, e.x, e.z)?.y;
+     };
+ 
+diff --git a/src/mapviewer/webgl/loader/SdMapData.ts b/src/mapviewer/webgl/loader/SdMapData.ts
+index 8db8b2b..cd168bc 100644
+--- a/src/mapviewer/webgl/loader/SdMapData.ts
++++ b/src/mapviewer/webgl/loader/SdMapData.ts
+@@ -10,6 +10,7 @@ export type SdMapData = {
+     cacheName: string;
+ 
+     maxLevel: number;
++    hideRoofs: boolean;
+     loadNpcs: boolean;
+ 
+     smoothTerrain: boolean;
+diff --git a/src/mapviewer/webgl/loader/SdMapDataLoader.ts b/src/mapviewer/webgl/loader/SdMapDataLoader.ts
+index ccc459c..ea7cc55 100644
+--- a/src/mapviewer/webgl/loader/SdMapDataLoader.ts
++++ b/src/mapviewer/webgl/loader/SdMapDataLoader.ts
+@@ -477,6 +477,7 @@ export class SdMapDataLoader implements RenderDataLoader<SdMapLoaderInput, SdMap
+             mapX,
+             mapY,
+             maxLevel,
++            hideRoofs,
+             loadNpcs,
+             smoothTerrain,
+             minimizeDrawCalls,
+@@ -516,7 +517,7 @@ export class SdMapDataLoader implements RenderDataLoader<SdMapLoaderInput, SdMap
+         const sceneBuf = new SceneBuffer(textureLoader, textureIdIndexMap, 100000);
+         sceneBuf.addTerrain(scene, borderSize, maxLevel);
+ 
+-        const sceneLocs = getSceneLocs(locTypeLoader, scene, borderSize, maxLevel);
++        const sceneLocs = getSceneLocs(locTypeLoader, scene, borderSize, maxLevel, hideRoofs);
+         const sceneModels = sceneLocs.locs;
+ 
+         // Create loc animated groups and add transformed locs
+@@ -680,7 +681,7 @@ export class SdMapDataLoader implements RenderDataLoader<SdMapLoaderInput, SdMap
+ 
+             modelTextureDataInteractLod.buffer,
+             modelTextureDataInteractLodAlpha.buffer,
+-        ];
++        ].filter((buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer);
+ 
+         const totalBytes = transferables.reduce((sum, buf) => sum + buf.byteLength, 0);
+ 
+@@ -698,6 +699,7 @@ export class SdMapDataLoader implements RenderDataLoader<SdMapLoaderInput, SdMap
+                 cacheName: state.cache.info.name,
+ 
+                 maxLevel,
++                hideRoofs,
+                 loadNpcs,
+ 
+                 smoothTerrain,
+diff --git a/src/mapviewer/webgl/loader/SdMapLoaderInput.ts b/src/mapviewer/webgl/loader/SdMapLoaderInput.ts
+index c7ed600..9ec5866 100644
+--- a/src/mapviewer/webgl/loader/SdMapLoaderInput.ts
++++ b/src/mapviewer/webgl/loader/SdMapLoaderInput.ts
+@@ -3,6 +3,7 @@ export type SdMapLoaderInput = {
+     mapY: number;
+ 
+     maxLevel: number;
++    hideRoofs: boolean;
+     loadNpcs: boolean;
+ 
+     smoothTerrain: boolean;
+diff --git a/src/mapviewer/webgl/loc/SceneLocs.ts b/src/mapviewer/webgl/loc/SceneLocs.ts
+index 2c63618..d924699 100644
+--- a/src/mapviewer/webgl/loc/SceneLocs.ts
++++ b/src/mapviewer/webgl/loc/SceneLocs.ts
+@@ -135,6 +135,7 @@ export function getSceneLocs(
+     scene: Scene,
+     borderSize: number,
+     maxLevel: number,
++    hideRoofs = false,
+ ): SceneLocs {
+     const locs: SceneModel[] = [];
+     const locEntities: SceneLocEntity[] = [];
+@@ -315,6 +316,7 @@ export function getSceneLocs(
+                 }
+ 
+                 for (const loc of tile.locs) {
++                    if (hideRoofs && isRoofShape(loc.flags)) continue;
+                     if (loc.startX !== tileX || loc.startY !== tileY) {
+                         continue;
+                     }
+@@ -357,3 +359,9 @@ export function getSceneLocs(
+         locEntities: locEntities,
+     };
+ }
++
++// Cache placement shapes identify roof geometry without guessing from object names.
++export function isRoofShape(flags: number): boolean {
++    const shape = flags & 0x3f;
++    return shape >= LocModelType.ROOF_SLOPED && shape <= LocModelType.ROOF_SLOPED_OVERHANG_HARD_OUTER_CORNER;
++}
+diff --git a/src/mapviewer/worker/RenderDataWorker.ts b/src/mapviewer/worker/RenderDataWorker.ts
+index de074bc..1f1ca36 100644
+--- a/src/mapviewer/worker/RenderDataWorker.ts
++++ b/src/mapviewer/worker/RenderDataWorker.ts
+@@ -264,7 +264,7 @@ const worker = {
+         if (loader.bodyCache.size > 512) {
+             loader.clearCache();
+         }
+-        return Transfer(data, [data.vertices.buffer, data.indices.buffer]);
++        return Transfer(data, [data.vertices.buffer, data.indices.buffer].filter((buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer));
+     },
+     async loadTexture(
+         id: number,
+@@ -279,7 +279,7 @@ const worker = {
+ 
+         const pixels = workerState.textureLoader.getPixelsArgb(id, size, flipH, brightness);
+ 
+-        return Transfer(pixels, [pixels.buffer]);
++        return Transfer(pixels, [pixels.buffer].filter((buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer));
+     },
+     async loadMapImage(
+         mapX: number,
+diff --git a/src/rs/cache/CacheFiles.ts b/src/rs/cache/CacheFiles.ts
+index 497e31e..a6cde27 100644
+--- a/src/rs/cache/CacheFiles.ts
++++ b/src/rs/cache/CacheFiles.ts
+@@ -237,7 +237,8 @@ function partsToBuffer(parts: Uint8Array[], shared: boolean): ArrayBuffer {
+         u8.set(buffer, offset);
+         offset += buffer.byteLength;
+     }
+-    return sab;
++    // Shared buffers are an intentional transport option in the existing cache API.
++    return sab as ArrayBuffer;
+ }
+ 
+ type CachedFile = {
+diff --git a/src/rs/cache/loader/CacheLoaderFactory.ts b/src/rs/cache/loader/CacheLoaderFactory.ts
+index 4790be3..09f5705 100644
+--- a/src/rs/cache/loader/CacheLoaderFactory.ts
++++ b/src/rs/cache/loader/CacheLoaderFactory.ts
+@@ -43,6 +43,7 @@ export interface CacheLoaderFactory {
+     getIdkTypeLoader?(): TypeLoader<IdkType>;
+     getSpotAnimTypeLoader?(): TypeLoader<SpotAnimType>;
+     getHitmarkSprites?(): IndexedSprite[];
++    getHeadIconSprites?(): IndexedSprite[];
+ 
+     getQuestTypeLoader(): QuestTypeLoader | undefined;
+ 
+diff --git a/src/rs/cache/loader/DatCacheLoaderFactory.ts b/src/rs/cache/loader/DatCacheLoaderFactory.ts
+index 92fb2fa..a695be0 100644
+--- a/src/rs/cache/loader/DatCacheLoaderFactory.ts
++++ b/src/rs/cache/loader/DatCacheLoaderFactory.ts
+@@ -124,6 +124,10 @@ export class DatCacheLoaderFactory implements CacheLoaderFactory {
+         return loadMapSprites(this.mediaArchive, "hitmarks");
+     }
+ 
++    getHeadIconSprites(): IndexedSprite[] {
++        return loadMapSprites(this.mediaArchive, "headicons");
++    }
++
+     getSpotAnimTypeLoader(): TypeLoader<SpotAnimType> {
+         return DatTypeLoader.load(SpotAnimType, this.cacheInfo, this.configArchive, "spotanim");
+     }
+diff --git a/src/rs/cache/loader/LegacyCacheLoaderFactory.ts b/src/rs/cache/loader/LegacyCacheLoaderFactory.ts
+index d5987de..29c13c4 100644
+--- a/src/rs/cache/loader/LegacyCacheLoaderFactory.ts
++++ b/src/rs/cache/loader/LegacyCacheLoaderFactory.ts
+@@ -112,6 +112,10 @@ export class LegacyCacheLoaderFactory implements CacheLoaderFactory {
+         return loadMapSprites(this.mediaArchive, "hitmarks");
+     }
+ 
++    getHeadIconSprites(): IndexedSprite[] {
++        return loadMapSprites(this.mediaArchive, "headicons");
++    }
++
+     getSpotAnimTypeLoader(): TypeLoader<SpotAnimType> {
+         return DatTypeLoader.load(SpotAnimType, this.cacheInfo, this.configArchive, "spotanim");
+     }
+diff --git a/src/rs/compression/Bzip2.ts b/src/rs/compression/Bzip2.ts
+index dc24407..1325631 100644
+--- a/src/rs/compression/Bzip2.ts
++++ b/src/rs/compression/Bzip2.ts
+@@ -7,11 +7,9 @@ export class Bzip2 {
+ 
+     static wasmBzip: WasmBzip2;
+ 
+-    static async initWasm(): Promise<WasmBzip2> {
+-        const bzip = await WasmBzip2.init();
+-        Bzip2.wasmBzip = bzip;
+-        return bzip;
+-    }
++    // The bundled wasm-bz2 glue uses new Function, incompatible with the console CSP.
++    // Use the existing pure-JS decoder instead of allowing dynamic code execution.
++    static async initWasm(): Promise<void> {}
+ 
+     static decompress(compressed: Uint8Array, actualSize: number): Int8Array {
+         const compressedBzip = new Uint8Array(compressed.length + 4);
+diff --git a/src/rs/model/Model.ts b/src/rs/model/Model.ts
+index a17ed10..983f5b3 100644
+--- a/src/rs/model/Model.ts
++++ b/src/rs/model/Model.ts
+@@ -1027,7 +1027,7 @@ export class Model extends Entity {
+             if (group && group.length !== 0) {
+                 const scalings = this.animMayaScales[v];
+ 
+-                Model.sketetalTransformMatrix.fill(0);
++                for (let i = 0; i < 16; i++) Model.sketetalTransformMatrix[i] = 0;
+                 for (let i = 0; i < group.length; i++) {
+                     const boneId = group[i];
+                     const bone = skeletalBase.getBone(boneId);
+diff --git a/src/rs/model/skeletal/SkeletalBone.ts b/src/rs/model/skeletal/SkeletalBone.ts
+index 3d3291a..f66ef05 100644
+--- a/src/rs/model/skeletal/SkeletalBone.ts
++++ b/src/rs/model/skeletal/SkeletalBone.ts
+@@ -126,7 +126,7 @@ export class SkeletalBone {
+             this.invertedModelMatrices[poseId] = mat4.invert(
+                 mat4.create(),
+                 this.getModelMatrix(poseId),
+-            );
++            )!;
+         }
+         return this.invertedModelMatrices[poseId];
+     }
+diff --git a/src/rs/texture/procedural/operation/PerlinNoiseOperation.ts b/src/rs/texture/procedural/operation/PerlinNoiseOperation.ts
+index 4de4145..3ab9c45 100644
+--- a/src/rs/texture/procedural/operation/PerlinNoiseOperation.ts
++++ b/src/rs/texture/procedural/operation/PerlinNoiseOperation.ts
+@@ -22,7 +22,7 @@ export class PerlinNoiseOperation extends TextureOperation {
+     noiseInput0!: Int16Array;
+     noiseInput1!: Int16Array;
+ 
+-    permutations = new Int8Array(512);
++    permutations: Int8Array = new Int8Array(512);
+ 
+     static initNoise(): void {
+         // correct
+diff --git a/tsconfig.json b/tsconfig.json
+index 41ad0fb..60f3f00 100644
+--- a/tsconfig.json
++++ b/tsconfig.json
+@@ -8,11 +8,11 @@
+   },
+   "compilerOptions": {
+     "target": "ES2020",
++    "types": ["node", "react", "react-dom", "jest"],
+     "lib": [
+       "dom",
+       "dom.iterable",
+-      "esnext",
+-      "ES2020"
++      "ES2022"
+     ],
+     "allowJs": true,
+     "skipLibCheck": true,
+diff --git a/src/components/rs/worldmap/AtlasMarkers.ts b/src/components/rs/worldmap/AtlasMarkers.ts
+new file mode 100644
+index 0000000..921614c
+--- /dev/null
++++ b/src/components/rs/worldmap/AtlasMarkers.ts
+@@ -0,0 +1,31 @@
++export type AtlasMarker={key:string;x:number;y:number;label:string;color:string;plane?:number};
++export type MarkerGroup={key:string;x:number;y:number;color:string;members:AtlasMarker[]};
++/** Cluster in fixed world cells sized for the current zoom, so panning doesn't reshuffle groups. */
++export function atlasMarkerGroups(markers:AtlasMarker[],tileSize:number):MarkerGroup[]{
++    if(tileSize>=1.5)return markers.map(marker=>({...marker,members:[marker]}));
++    const size=32/tileSize,groups=new Map<string,MarkerGroup>();
++    for(const marker of markers){
++        if(!Number.isFinite(marker.x)||!Number.isFinite(marker.y))continue;
++        const key=marker.key==='camera'?marker.key:`${marker.plane??0}:${Math.floor(marker.x/size)}:${Math.floor(marker.y/size)}`;
++        const existing=groups.get(key);
++        if(existing){const n=existing.members.length;existing.x=(existing.x*n+marker.x)/(n+1);existing.y=(existing.y*n+marker.y)/(n+1);existing.members.push(marker);if(existing.color!==marker.color)existing.color='#a8b1c1';}
++        else groups.set(key,{key,x:marker.x,y:marker.y,color:marker.color,members:[marker]});
++    }
++    return [...groups.values()];
++}
++/** Start compact maps at the busiest local region, not the full cache including distant outliers. */
++export function atlasActivityView(markers:AtlasMarker[],width:number,height:number,tileSizes:readonly number[]){
++    const cells=new Map<string,AtlasMarker[]>();
++    for(const marker of markers){
++        if(marker.key==='camera'||!Number.isFinite(marker.x)||!Number.isFinite(marker.y))continue;
++        const key=`${Math.floor(marker.x/64)}:${Math.floor(marker.y/64)}`;
++        const cell=cells.get(key);if(cell)cell.push(marker);else cells.set(key,[marker]);
++    }
++    const busiest=[...cells.values()].sort((a,b)=>b.length-a.length)[0];
++    if(!busiest||width<=0||height<=0)return undefined;
++    const x=busiest.reduce((sum,p)=>sum+p.x,0)/busiest.length,y=busiest.reduce((sum,p)=>sum+p.y,0)/busiest.length;
++    // Neighborhood scale: keep players and nearby buildings legible, even in short panels.
++    const desired=Math.max(3,Math.min(6,width/128,height/64));
++    const sizes=tileSizes.filter(size=>size<=desired);
++    return {x,y,tileSize:sizes[sizes.length-1]??tileSizes[0]};
++}
+diff --git a/src/live/AtlasCombatPreference.ts b/src/live/AtlasCombatPreference.ts
+new file mode 100644
+index 0000000..de89701
+--- /dev/null
++++ b/src/live/AtlasCombatPreference.ts
+@@ -0,0 +1,16 @@
++export const ATLAS_COMBAT_KEY = 'rs-watch:atlas-multi';
++const CHANGE_EVENT = 'rs-watch:atlas-multi-change';
++export function readAtlasCombat(storage?:Pick<Storage,'getItem'>):boolean {
++    try{return (storage??window.localStorage).getItem(ATLAS_COMBAT_KEY)!=='false';}catch{return true;}
++}
++export function writeAtlasCombat(enabled:boolean,storage:Pick<Storage,'setItem'>|undefined = undefined,target:EventTarget = window):void {
++    try{(storage??window.localStorage).setItem(ATLAS_COMBAT_KEY,String(enabled));}catch{}
++    // Storage events reach other same-origin frames; this event reaches this document.
++    target.dispatchEvent(new CustomEvent(CHANGE_EVENT,{detail:enabled}));
++}
++export function subscribeAtlasCombat(onChange:(enabled:boolean)=>void,target:EventTarget = window):()=>void {
++    const local=(event:Event)=>onChange((event as CustomEvent<boolean>).detail);
++    const remote=(event:Event)=>{const storageEvent=event as StorageEvent;if(storageEvent.key===ATLAS_COMBAT_KEY||storageEvent.key===null)onChange(storageEvent.newValue!=='false');};
++    target.addEventListener(CHANGE_EVENT,local);target.addEventListener('storage',remote);
++    return()=>{target.removeEventListener(CHANGE_EVENT,local);target.removeEventListener('storage',remote);};
++}
+diff --git a/src/live/MultiCombat.ts b/src/live/MultiCombat.ts
+new file mode 100644
+index 0000000..913bd0b
+--- /dev/null
++++ b/src/live/MultiCombat.ts
+@@ -0,0 +1,25 @@
++import data from './multi-combat-data.json';
++
++export const multiCombatSource = {path:data.source, sha256:data.sha256, liveVerified:false};
++export const MULTI_COMBAT_NOTE = 'Local game-source boundaries; live server revision unverified. Multi-combat is not a PvP or safety indicator.';
++export const multiCombatZones = data.zones as [number, number, number][];
++const key = (plane:number,x:number,z:number) => `${plane}:${Math.floor(x/8)}:${Math.floor(z/8)}`;
++const zoneKeys = new Set(multiCombatZones.map(([plane,x,z])=>key(plane,x,z)));
++export function isMultiCombat(x:number,z:number,plane:number):boolean|null {
++    if(!Number.isFinite(x)||!Number.isFinite(z)||x<0||z<0||x>=16384||z>=16384||!Number.isInteger(plane)||plane<0||plane>3)return null;
++    return zoneKeys.has(key(plane,x,z));
++}
++export function combatZoneStatus(position:{x:number;z:number;plane:number}|undefined,fresh:boolean):'MULTI'|'SINGLE'|'UNKNOWN' {
++    if(!fresh||!position)return 'UNKNOWN';
++    const multi=isMultiCombat(position.x,position.z,position.plane);
++    return multi===null?'UNKNOWN':multi?'MULTI':'SINGLE';
++}
++// Each iframe owns its floor and visibility preference; new views start enabled.
++export const multiCombatView = {enabled:true,plane:0};
++// Horizontal strips keep the atlas inexpensive even at a whole-world zoom.
++export const multiCombatStrips:{plane:number;x:number;z:number;width:number}[]=[];
++for(const [plane,x,z] of [...multiCombatZones].sort((a,b)=>a[0]-b[0]||a[2]-b[2]||a[1]-b[1])) {
++    const last=multiCombatStrips[multiCombatStrips.length-1];
++    if(last&&last.plane===plane&&last.z===z&&last.x+last.width===x)last.width+=8;
++    else multiCombatStrips.push({plane,x,z,width:8});
++}
+diff --git a/src/live/ResearchLayers.ts b/src/live/ResearchLayers.ts
+new file mode 100644
+index 0000000..13670c2
+--- /dev/null
++++ b/src/live/ResearchLayers.ts
+@@ -0,0 +1,74 @@
++/** Bounded, observation-only overlays shared by the atlas and 3D renderer. */
++export type LayerSettings = {presence:boolean;trails:boolean;coverage:boolean;opacity:number};
++export const defaultLayers:LayerSettings={presence:true,trails:true,coverage:true,opacity:0.45};
++export function layerSettings(value:unknown):LayerSettings {
++    const v=value && typeof value==='object'?value as Partial<LayerSettings>:{};
++    return {presence:typeof v.presence==='boolean'?v.presence:true,trails:typeof v.trails==='boolean'?v.trails:true,coverage:typeof v.coverage==='boolean'?v.coverage:true,opacity:typeof v.opacity==='number'&&Number.isFinite(v.opacity)?Math.max(.1,Math.min(.9,v.opacity)):.45};
++}
++export function readLayers(key:string):LayerSettings {try{return layerSettings(JSON.parse(localStorage.getItem(key)??'null'));}catch{return {...defaultLayers};}}
++export type ResearchPlayer={name:string;x:number;z:number;plane:number};
++export type TrailSegment={name:string;x:number;z:number;endX:number;endZ:number;plane:number;at:number};
++export type ResearchSource={rosterAt:number;detailAt:number;connected:boolean;players:ResearchPlayer[];trails:TrailSegment[];area?:{x:number;z:number;w:number;h:number};truncated:boolean};
++export const researchView:{settings:LayerSettings;source?:ResearchSource}={settings:{...defaultLayers}};
++export const TRAIL_WINDOW=300000, SAMPLE_INTERVAL=15000;
++const key=(name:string)=>name.toLowerCase().replace(/[_ -]/g,'');
++export class MovementSamples {
++    private previous=new Map<string,ResearchPlayer & {at:number}>();
++    private segments:TrailSegment[]=[];
++    private sampledAt=0;
++    sample(players:ResearchPlayer[],at:number,fresh:boolean):TrailSegment[] {
++        this.segments=this.segments.filter(s=>s.at>=at-TRAIL_WINDOW);
++        if(!fresh){this.previous.clear();return this.segments;}
++        if(at-this.sampledAt<SAMPLE_INTERVAL)return this.segments;
++        const next=new Map<string,ResearchPlayer & {at:number}>();
++        for(const p of players.slice(0,5000)) {
++            if(!validPlayer(p))continue;
++            const id=key(p.name),old=this.previous.get(id);next.set(id,{...p,at});
++            // Never join floor changes, outages, teleports or missing observations.
++            if(old&&old.plane===p.plane&&at-old.at<=30000&&at>old.at) {
++                const distance=Math.hypot(p.x-old.x,p.z-old.z);
++                if(distance>0&&distance<=64)this.segments.push({name:p.name,x:old.x,z:old.z,endX:p.x,endZ:p.z,plane:p.plane,at});
++            }
++        }
++        this.sampledAt=at;this.previous=next;this.segments=this.segments.slice(-6000);
++        return this.segments;
++    }
++}
++export function validPlayer(p:ResearchPlayer){return typeof p?.name==='string'&&Number.isFinite(p.x)&&Number.isFinite(p.z)&&Number.isInteger(p.plane)&&p.plane>=0&&p.plane<=3;}
++export function rosterFresh(source:ResearchSource|undefined,now=Date.now()){return !!source?.connected&&source.rosterAt>0&&now-source.rosterAt>=0&&now-source.rosterAt<=10000;}
++export function detailFresh(source:ResearchSource|undefined,now=Date.now()){return !!source?.connected&&source.detailAt>0&&now-source.detailAt>=0&&now-source.detailAt<=5000;}
++export type LayerShape={points:[number,number][];color:string;alpha:number;fill:boolean;dashed?:boolean};
++export function researchShapes(source:ResearchSource|undefined,settings:LayerSettings,plane:number,bounds:{minX:number;maxX:number;minZ:number;maxZ:number},color:(name:string)=>string,visible:(name:string)=>boolean=()=>true,now=Date.now()):LayerShape[] {
++    if(!source)return [];
++    const result:LayerShape[]=[];
++    const intersects=(x:number,z:number,w=0,h=0)=>x+w>=bounds.minX&&x<=bounds.maxX&&z+h>=bounds.minZ&&z<=bounds.maxZ;
++    if(settings.presence&&rosterFresh(source,now)) {
++        const cells=new Map<string,{x:number;z:number;color:string;count:number}>();
++        for(const p of source.players) {
++            if(p.plane!==plane||!visible(p.name))continue;
++            const x=Math.floor(p.x/8)*8,z=Math.floor(p.z/8)*8;if(!intersects(x,z,8,8))continue;
++            const c=color(p.name),id=`${x}:${z}:${c}`,cell=cells.get(id);
++            if(cell)cell.count++;else cells.set(id,{x,z,color:c,count:1});
++        }
++        for(const c of Array.from(cells.values()).slice(0,2000))result.push({points:[[c.x,c.z],[c.x+8,c.z],[c.x+8,c.z+8],[c.x,c.z+8]],color:c.color,alpha:settings.opacity*Math.min(.8,.2+Math.log2(c.count+1)*.15),fill:true});
++    }
++    if(settings.trails) {
++        let count=0;
++        for(let i=source.trails.length-1;i>=0&&count<1500;i--) {
++            const s=source.trails[i],age=now-s.at;
++            if(s.plane!==plane||age<0||age>TRAIL_WINDOW||!visible(s.name)||!intersects(Math.min(s.x,s.endX),Math.min(s.z,s.endZ),Math.abs(s.endX-s.x),Math.abs(s.endZ-s.z)))continue;
++            result.push({points:[[s.x,s.z],[s.endX,s.endZ]],color:color(s.name),alpha:settings.opacity*(1-age/TRAIL_WINDOW),fill:false,dashed:true});count++;
++        }
++    }
++    const a=source.area;
++    if(settings.coverage&&a&&[a.x,a.z,a.w,a.h].every(Number.isFinite)&&a.w>0&&a.w<=384&&a.h>0&&a.h<=384&&intersects(a.x,a.z,a.w,a.h)) {
++        const fresh=detailFresh(source,now),c=fresh?'#7ce2ff':'#a8b1c1';
++        const edges:[number,number,number,number][]=[[a.x,a.z,a.x+a.w,a.z],[a.x+a.w,a.z,a.x+a.w,a.z+a.h],[a.x+a.w,a.z+a.h,a.x,a.z+a.h],[a.x,a.z+a.h,a.x,a.z]];
++        // Short terrain-projected edges remain visible even if far corners aren't loaded.
++        for(const [x,z,endX,endZ] of edges){const steps=Math.ceil(Math.hypot(endX-x,endZ-z)/8);for(let i=0;i<steps;i++){
++            const x1=x+(endX-x)*i/steps,z1=z+(endZ-z)*i/steps,x2=x+(endX-x)*(i+1)/steps,z2=z+(endZ-z)*(i+1)/steps;
++            if(intersects(Math.min(x1,x2),Math.min(z1,z2),Math.abs(x2-x1),Math.abs(z2-z1)))result.push({points:[[x1,z1],[x2,z2]],color:c,alpha:settings.opacity,fill:false,dashed:!fresh});
++        }}
++    }
++    return result;
++}
+diff --git a/src/live/StreamTiming.ts b/src/live/StreamTiming.ts
+new file mode 100644
+index 0000000..72345b3
+--- /dev/null
++++ b/src/live/StreamTiming.ts
+@@ -0,0 +1,21 @@
++/** Local relay-to-draw timing, not game-server-to-display latency. */
++export function needsResync(message:{relayObservedAt?:number;relaySnapshot?:boolean},now=Date.now()):boolean {
++ return message.relaySnapshot===false && Number.isFinite(message.relayObservedAt) && message.relayObservedAt!>0 && now-message.relayObservedAt!>2000;
++}
++export class StreamTiming {
++ private pendingAt:number|undefined;
++ private samples:number[]=[];
++ private frameTimes:number[]=[];
++ lastFrameAt=0;
++ applied(at:number){if(at>0)this.pendingAt=at;}
++ reset(){this.pendingAt=undefined;this.samples=[];this.frameTimes=[];this.lastFrameAt=0;}
++ drawn(now=Date.now()){
++  this.lastFrameAt=now;this.frameTimes.push(now);
++  while(this.frameTimes.length && (this.frameTimes[0]<now-2000 || this.frameTimes.length>240))this.frameTimes.shift();
++  if(this.pendingAt!==undefined){this.samples.push(Math.max(0,now-this.pendingAt));if(this.samples.length>120)this.samples.shift();this.pendingAt=undefined;}
++ }
++ snapshot(now=Date.now()){
++  const sorted=[...this.samples].sort((a,b)=>a-b),frames=this.frameTimes.filter(t=>t>=now-2000);
++  return {at:now,lastFrameAt:this.lastFrameAt,localDrawMs:this.samples.length?this.samples[this.samples.length-1]:null,localDrawP95Ms:sorted.length?sorted[Math.ceil(sorted.length*.95)-1]:null,samples:sorted.length,fps:frames.length>1?Math.round((frames.length-1)*1000/Math.max(1,frames[frames.length-1]-frames[0])):0};
++ }
++}
+diff --git a/src/live/multi-combat-data.json b/src/live/multi-combat-data.json
+new file mode 100644
+index 0000000..e5e18f9
+--- /dev/null
++++ b/src/live/multi-combat-data.json
+@@ -0,0 +1 @@
++{"source":"server/content/maps/multiway.csv","sha256":"6286ae39477d672b58b499a0b721d477e742e00fa4a045dba0407c73e985c098","liveVerified":false,"zones":[[0,2496,4672],[0,2496,4680],[0,2496,4688],[0,2496,4696],[0,2496,4704],[0,2496,4712],[0,2496,4720],[0,2496,4728],[0,2504,3208],[0,2504,3216],[0,2504,3224],[0,2504,3232],[0,2504,3240],[0,2504,4672],[0,2504,4680],[0,2504,4688],[0,2504,4696],[0,2504,4704],[0,2504,4712],[0,2504,4720],[0,2504,4728],[0,2512,3208],[0,2512,3216],[0,2512,3224],[0,2512,3232],[0,2512,3240],[0,2512,4672],[0,2512,4680],[0,2512,4688],[0,2512,4696],[0,2512,4704],[0,2512,4712],[0,2512,4720],[0,2512,4728],[0,2520,3208],[0,2520,3216],[0,2520,3224],[0,2520,3232],[0,2520,3240],[0,2520,4672],[0,2520,4680],[0,2520,4688],[0,2520,4696],[0,2520,4704],[0,2520,4712],[0,2520,4720],[0,2520,4728],[0,2528,3208],[0,2528,3216],[0,2528,3224],[0,2528,3232],[0,2528,3240],[0,2528,4672],[0,2528,4680],[0,2528,4688],[0,2528,4696],[0,2528,4704],[0,2528,4712],[0,2528,4720],[0,2528,4728],[0,2536,3208],[0,2536,3216],[0,2536,3224],[0,2536,3232],[0,2536,3240],[0,2536,4672],[0,2536,4680],[0,2536,4688],[0,2536,4696],[0,2536,4704],[0,2536,4712],[0,2536,4720],[0,2536,4728],[0,2544,3208],[0,2544,3216],[0,2544,3224],[0,2544,4672],[0,2544,4680],[0,2544,4688],[0,2544,4696],[0,2544,4704],[0,2544,4712],[0,2544,4720],[0,2544,4728],[0,2552,4672],[0,2552,4680],[0,2552,4688],[0,2552,4696],[0,2552,4704],[0,2552,4712],[0,2552,4720],[0,2552,4728],[0,2624,9856],[0,2624,9864],[0,2624,9872],[0,2624,9880],[0,2624,9888],[0,2624,9896],[0,2624,9904],[0,2624,9912],[0,2632,9856],[0,2632,9864],[0,2632,9872],[0,2632,9880],[0,2632,9888],[0,2632,9896],[0,2632,9904],[0,2632,9912],[0,2640,9856],[0,2640,9864],[0,2640,9872],[0,2640,9880],[0,2640,9888],[0,2640,9896],[0,2640,9904],[0,2640,9912],[0,2648,3416],[0,2648,3424],[0,2648,3432],[0,2648,9856],[0,2648,9864],[0,2648,9872],[0,2648,9880],[0,2648,9888],[0,2648,9896],[0,2648,9904],[0,2648,9912],[0,2656,3232],[0,2656,3240],[0,2656,3248],[0,2656,3408],[0,2656,3416],[0,2656,3424],[0,2656,3432],[0,2656,3440],[0,2656,9856],[0,2656,9864],[0,2656,9872],[0,2656,9880],[0,2656,9888],[0,2656,9896],[0,2656,9904],[0,2656,9912],[0,2664,3216],[0,2664,3224],[0,2664,3232],[0,2664,3240],[0,2664,3248],[0,2664,3408],[0,2664,3416],[0,2664,3424],[0,2664,3432],[0,2664,3440],[0,2664,9856],[0,2664,9864],[0,2664,9872],[0,2664,9880],[0,2664,9888],[0,2664,9896],[0,2664,9904],[0,2664,9912],[0,2672,3216],[0,2672,3224],[0,2672,3232],[0,2672,3240],[0,2672,3248],[0,2672,3408],[0,2672,3416],[0,2672,3424],[0,2672,3432],[0,2672,3440],[0,2680,3416],[0,2680,3424],[0,2680,3432],[0,2688,9856],[0,2688,9864],[0,2688,9872],[0,2688,9880],[0,2688,9888],[0,2688,9896],[0,2688,9904],[0,2688,9912],[0,2696,9856],[0,2696,9864],[0,2696,9872],[0,2696,9880],[0,2696,9888],[0,2696,9896],[0,2696,9904],[0,2696,9912],[0,2704,9800],[0,2704,9808],[0,2704,9816],[0,2704,9824],[0,2704,9856],[0,2704,9864],[0,2704,9872],[0,2704,9880],[0,2704,9888],[0,2704,9896],[0,2704,9904],[0,2704,9912],[0,2712,9800],[0,2712,9808],[0,2712,9816],[0,2712,9824],[0,2712,9856],[0,2712,9864],[0,2712,9872],[0,2712,9880],[0,2712,9888],[0,2712,9896],[0,2712,9904],[0,2712,9912],[0,2720,9800],[0,2720,9808],[0,2720,9816],[0,2720,9824],[0,2720,9856],[0,2720,9864],[0,2720,9872],[0,2720,9880],[0,2720,9888],[0,2720,9896],[0,2720,9904],[0,2720,9912],[0,2728,9800],[0,2728,9808],[0,2728,9816],[0,2728,9824],[0,2728,9856],[0,2728,9864],[0,2728,9872],[0,2728,9880],[0,2728,9888],[0,2728,9896],[0,2728,9904],[0,2728,9912],[0,2736,9856],[0,2736,9864],[0,2736,9872],[0,2736,9880],[0,2736,9888],[0,2736,9896],[0,2736,9904],[0,2736,9912],[0,2744,9856],[0,2744,9864],[0,2744,9872],[0,2744,9880],[0,2744,9888],[0,2744,9896],[0,2744,9904],[0,2744,9912],[0,2752,9312],[0,2752,9320],[0,2752,9328],[0,2752,9336],[0,2760,9312],[0,2760,9320],[0,2760,9328],[0,2760,9336],[0,2768,9312],[0,2768,9320],[0,2768,9328],[0,2776,9312],[0,2776,9320],[0,2792,9296],[0,2792,9304],[0,2800,9288],[0,2800,9296],[0,2800,9304],[0,2808,9288],[0,2808,9296],[0,2808,9304],[0,2816,3456],[0,2816,3464],[0,2816,3472],[0,2816,3480],[0,2816,3488],[0,2816,3496],[0,2816,3504],[0,2816,3512],[0,2824,3456],[0,2824,3464],[0,2824,3472],[0,2824,3480],[0,2824,3488],[0,2824,3496],[0,2824,3504],[0,2824,3512],[0,2832,3456],[0,2832,3464],[0,2832,3472],[0,2832,3480],[0,2832,3488],[0,2832,3496],[0,2832,3504],[0,2832,3512],[0,2840,3456],[0,2840,3464],[0,2840,3472],[0,2840,3480],[0,2840,3488],[0,2840,3496],[0,2840,3504],[0,2840,3512],[0,2848,3456],[0,2848,3464],[0,2848,3472],[0,2848,3480],[0,2848,3488],[0,2848,3496],[0,2848,3504],[0,2848,3512],[0,2848,3600],[0,2848,9928],[0,2848,9936],[0,2848,9944],[0,2848,9952],[0,2848,9960],[0,2856,3456],[0,2856,3464],[0,2856,3472],[0,2856,3480],[0,2856,3488],[0,2856,3496],[0,2856,3504],[0,2856,3512],[0,2856,3600],[0,2856,9928],[0,2856,9936],[0,2856,9944],[0,2856,9952],[0,2856,9960],[0,2864,3456],[0,2864,3464],[0,2864,3472],[0,2864,3480],[0,2864,3488],[0,2864,3496],[0,2864,3504],[0,2864,3512],[0,2864,3600],[0,2864,9928],[0,2864,9936],[0,2864,9944],[0,2864,9952],[0,2864,9960],[0,2872,3456],[0,2872,3464],[0,2872,3472],[0,2872,3480],[0,2872,3488],[0,2872,3496],[0,2872,3504],[0,2872,3512],[0,2872,3600],[0,2872,9928],[0,2872,9936],[0,2872,9944],[0,2872,9952],[0,2872,9960],[0,2880,3520],[0,2880,3528],[0,2880,3536],[0,2880,3696],[0,2880,3704],[0,2880,9472],[0,2880,9480],[0,2880,9488],[0,2880,9496],[0,2880,9504],[0,2880,9512],[0,2880,9520],[0,2880,9528],[0,2888,3520],[0,2888,3528],[0,2888,3536],[0,2888,3696],[0,2888,3704],[0,2888,9472],[0,2888,9480],[0,2888,9488],[0,2888,9496],[0,2888,9504],[0,2888,9512],[0,2888,9520],[0,2888,9528],[0,2896,3520],[0,2896,3528],[0,2896,3536],[0,2896,3688],[0,2896,3696],[0,2896,3704],[0,2896,9472],[0,2896,9480],[0,2896,9488],[0,2896,9496],[0,2896,9504],[0,2896,9512],[0,2896,9520],[0,2896,9528],[0,2904,3688],[0,2904,3696],[0,2904,3704],[0,2904,9472],[0,2904,9480],[0,2904,9488],[0,2904,9496],[0,2904,9504],[0,2904,9512],[0,2904,9520],[0,2904,9528],[0,2912,3688],[0,2912,9472],[0,2912,9480],[0,2912,9488],[0,2912,9496],[0,2912,9504],[0,2912,9512],[0,2912,9520],[0,2912,9528],[0,2920,9472],[0,2920,9480],[0,2920,9488],[0,2920,9496],[0,2920,9504],[0,2920,9512],[0,2920,9520],[0,2920,9528],[0,2928,3512],[0,2928,9472],[0,2928,9480],[0,2928,9488],[0,2928,9496],[0,2928,9504],[0,2928,9512],[0,2928,9520],[0,2928,9528],[0,2936,3512],[0,2936,9472],[0,2936,9480],[0,2936,9488],[0,2936,9496],[0,2936,9504],[0,2936,9512],[0,2936,9520],[0,2936,9528],[0,2944,3304],[0,2944,3312],[0,2944,3320],[0,2944,3328],[0,2944,3336],[0,2944,3344],[0,2944,3352],[0,2944,3360],[0,2944,3368],[0,2944,3376],[0,2944,3384],[0,2944,3392],[0,2944,3400],[0,2944,3408],[0,2944,3416],[0,2944,3424],[0,2944,3432],[0,2944,3440],[0,2944,3448],[0,2944,3816],[0,2944,3824],[0,2952,3304],[0,2952,3312],[0,2952,3320],[0,2952,3328],[0,2952,3336],[0,2952,3344],[0,2952,3352],[0,2952,3360],[0,2952,3368],[0,2952,3376],[0,2952,3384],[0,2952,3392],[0,2952,3400],[0,2952,3408],[0,2952,3416],[0,2952,3424],[0,2952,3432],[0,2952,3440],[0,2952,3448],[0,2952,3816],[0,2952,3824],[0,2960,3304],[0,2960,3312],[0,2960,3320],[0,2960,3328],[0,2960,3336],[0,2960,3344],[0,2960,3352],[0,2960,3360],[0,2960,3368],[0,2960,3376],[0,2960,3384],[0,2960,3392],[0,2960,3400],[0,2960,3408],[0,2960,3416],[0,2960,3424],[0,2960,3432],[0,2960,3440],[0,2960,3448],[0,2968,3304],[0,2968,3312],[0,2968,3320],[0,2968,3328],[0,2968,3336],[0,2968,3344],[0,2968,3352],[0,2968,3360],[0,2968,3368],[0,2968,3376],[0,2968,3384],[0,2968,3392],[0,2968,3400],[0,2968,3408],[0,2968,3416],[0,2968,3424],[0,2968,3432],[0,2968,3440],[0,2968,3448],[0,2976,3304],[0,2976,3312],[0,2976,3320],[0,2976,3328],[0,2976,3336],[0,2976,3344],[0,2976,3352],[0,2976,3360],[0,2976,3368],[0,2976,3376],[0,2976,3384],[0,2976,3392],[0,2976,3400],[0,2976,3408],[0,2976,3416],[0,2976,3424],[0,2976,3432],[0,2976,3440],[0,2976,3448],[0,2984,3304],[0,2984,3312],[0,2984,3320],[0,2984,3328],[0,2984,3336],[0,2984,3344],[0,2984,3352],[0,2984,3360],[0,2984,3368],[0,2984,3376],[0,2984,3384],[0,2984,3392],[0,2984,3400],[0,2984,3408],[0,2984,3416],[0,2984,3424],[0,2984,3432],[0,2984,3440],[0,2984,3448],[0,2984,3912],[0,2984,3920],[0,2992,3304],[0,2992,3312],[0,2992,3320],[0,2992,3328],[0,2992,3336],[0,2992,3344],[0,2992,3352],[0,2992,3360],[0,2992,3368],[0,2992,3376],[0,2992,3384],[0,2992,3392],[0,2992,3400],[0,2992,3408],[0,2992,3416],[0,2992,3424],[0,2992,3432],[0,2992,3440],[0,2992,3448],[0,2992,3912],[0,2992,3920],[0,3000,3304],[0,3000,3312],[0,3000,3320],[0,3000,3328],[0,3000,3336],[0,3000,3344],[0,3000,3352],[0,3000,3360],[0,3000,3368],[0,3000,3376],[0,3000,3384],[0,3000,3392],[0,3000,3400],[0,3000,3408],[0,3000,3416],[0,3000,3424],[0,3000,3432],[0,3000,3440],[0,3000,3448],[0,3000,3912],[0,3000,3920],[0,3008,3600],[0,3008,3608],[0,3008,3616],[0,3008,3624],[0,3008,3632],[0,3008,3640],[0,3008,3648],[0,3008,3656],[0,3008,3664],[0,3008,3672],[0,3008,3680],[0,3008,3688],[0,3008,3696],[0,3008,3704],[0,3008,3856],[0,3008,3864],[0,3008,3872],[0,3008,3880],[0,3008,3888],[0,3008,3896],[0,3016,3600],[0,3016,3608],[0,3016,3616],[0,3016,3624],[0,3016,3632],[0,3016,3640],[0,3016,3648],[0,3016,3656],[0,3016,3664],[0,3016,3672],[0,3016,3680],[0,3016,3688],[0,3016,3696],[0,3016,3704],[0,3016,3856],[0,3016,3864],[0,3016,3872],[0,3016,3880],[0,3016,3888],[0,3016,3896],[0,3024,3600],[0,3024,3608],[0,3024,3616],[0,3024,3624],[0,3024,3632],[0,3024,3640],[0,3024,3648],[0,3024,3656],[0,3024,3664],[0,3024,3672],[0,3024,3680],[0,3024,3688],[0,3024,3696],[0,3024,3704],[0,3024,3856],[0,3024,3864],[0,3024,3872],[0,3024,3880],[0,3024,3888],[0,3024,3896],[0,3032,3600],[0,3032,3608],[0,3032,3616],[0,3032,3624],[0,3032,3632],[0,3032,3640],[0,3032,3648],[0,3032,3656],[0,3032,3664],[0,3032,3672],[0,3032,3680],[0,3032,3688],[0,3032,3696],[0,3032,3704],[0,3032,3856],[0,3032,3864],[0,3032,3872],[0,3032,3880],[0,3032,3888],[0,3032,3896],[0,3040,3600],[0,3040,3608],[0,3040,3616],[0,3040,3624],[0,3040,3632],[0,3040,3640],[0,3040,3648],[0,3040,3656],[0,3040,3664],[0,3040,3672],[0,3040,3680],[0,3040,3688],[0,3040,3696],[0,3040,3704],[0,3040,3856],[0,3040,3864],[0,3040,3872],[0,3040,3880],[0,3040,3888],[0,3040,3896],[0,3048,3600],[0,3048,3608],[0,3048,3616],[0,3048,3624],[0,3048,3632],[0,3048,3640],[0,3048,3648],[0,3048,3656],[0,3048,3664],[0,3048,3672],[0,3048,3680],[0,3048,3688],[0,3048,3696],[0,3048,3704],[0,3048,3864],[0,3048,3896],[0,3056,3600],[0,3056,3608],[0,3056,3616],[0,3056,3624],[0,3056,3632],[0,3056,3640],[0,3056,3648],[0,3056,3656],[0,3056,3664],[0,3056,3672],[0,3056,3680],[0,3056,3688],[0,3056,3696],[0,3056,3704],[0,3056,3896],[0,3064,3600],[0,3064,3608],[0,3064,3616],[0,3064,3624],[0,3064,3632],[0,3064,3640],[0,3064,3648],[0,3064,3656],[0,3064,3664],[0,3064,3672],[0,3064,3680],[0,3064,3688],[0,3064,3696],[0,3064,3704],[0,3064,3896],[0,3072,3392],[0,3072,3400],[0,3072,3408],[0,3072,3416],[0,3072,3424],[0,3072,3432],[0,3072,3440],[0,3072,3448],[0,3072,3880],[0,3072,3888],[0,3072,3896],[0,3080,3392],[0,3080,3400],[0,3080,3408],[0,3080,3416],[0,3080,3424],[0,3080,3432],[0,3080,3440],[0,3080,3448],[0,3080,3880],[0,3080,3888],[0,3080,3896],[0,3088,3392],[0,3088,3400],[0,3088,3408],[0,3088,3416],[0,3088,3424],[0,3088,3432],[0,3088,3440],[0,3088,3448],[0,3088,3880],[0,3088,3888],[0,3088,3896],[0,3096,3144],[0,3096,3152],[0,3096,3160],[0,3096,3168],[0,3096,3392],[0,3096,3400],[0,3096,3408],[0,3096,3416],[0,3096,3424],[0,3096,3432],[0,3096,3440],[0,3096,3448],[0,3096,3880],[0,3096,3888],[0,3096,3896],[0,3104,3144],[0,3104,3152],[0,3104,3160],[0,3104,3168],[0,3104,3232],[0,3104,3240],[0,3104,3248],[0,3104,3392],[0,3104,3400],[0,3104,3408],[0,3104,3416],[0,3104,3424],[0,3104,3432],[0,3104,3440],[0,3104,3448],[0,3104,3880],[0,3104,3888],[0,3104,3896],[0,3112,3144],[0,3112,3152],[0,3112,3160],[0,3112,3168],[0,3112,3232],[0,3112,3240],[0,3112,3248],[0,3112,3256],[0,3112,3392],[0,3112,3400],[0,3112,3408],[0,3112,3416],[0,3112,3424],[0,3112,3432],[0,3112,3440],[0,3112,3448],[0,3112,3872],[0,3112,3880],[0,3112,3888],[0,3112,3896],[0,3120,3144],[0,3120,3152],[0,3120,3160],[0,3120,3168],[0,3120,3232],[0,3120,3240],[0,3120,3248],[0,3120,3256],[0,3120,3392],[0,3120,3400],[0,3120,3408],[0,3120,3416],[0,3120,3424],[0,3120,3432],[0,3120,3440],[0,3120,3448],[0,3120,3872],[0,3120,3880],[0,3120,3888],[0,3120,3896],[0,3128,3232],[0,3128,3240],[0,3128,3248],[0,3128,3256],[0,3128,3392],[0,3128,3400],[0,3128,3408],[0,3128,3416],[0,3128,3424],[0,3128,3432],[0,3128,3440],[0,3128,3448],[0,3128,3872],[0,3128,3880],[0,3128,3888],[0,3128,3896],[0,3136,3520],[0,3136,3528],[0,3136,3536],[0,3136,3544],[0,3136,3552],[0,3136,3560],[0,3136,3568],[0,3136,3576],[0,3136,3840],[0,3136,3848],[0,3136,3856],[0,3136,3864],[0,3136,3872],[0,3136,3880],[0,3136,3888],[0,3136,3896],[0,3144,3520],[0,3144,3528],[0,3144,3536],[0,3144,3544],[0,3144,3552],[0,3144,3560],[0,3144,3568],[0,3144,3576],[0,3144,3840],[0,3144,3848],[0,3144,3856],[0,3144,3864],[0,3144,3872],[0,3144,3880],[0,3144,3888],[0,3144,3896],[0,3152,3520],[0,3152,3528],[0,3152,3536],[0,3152,3544],[0,3152,3552],[0,3152,3560],[0,3152,3568],[0,3152,3576],[0,3152,3752],[0,3152,3760],[0,3152,3768],[0,3152,3776],[0,3152,3784],[0,3152,3792],[0,3152,3800],[0,3152,3808],[0,3152,3816],[0,3152,3824],[0,3152,3832],[0,3152,3840],[0,3152,3848],[0,3152,3856],[0,3152,3864],[0,3152,3872],[0,3152,3880],[0,3152,3888],[0,3152,3896],[0,3152,9856],[0,3152,9864],[0,3152,9872],[0,3152,9880],[0,3152,9888],[0,3152,9896],[0,3152,9904],[0,3152,9912],[0,3160,3520],[0,3160,3528],[0,3160,3536],[0,3160,3544],[0,3160,3552],[0,3160,3560],[0,3160,3568],[0,3160,3576],[0,3160,3752],[0,3160,3760],[0,3160,3768],[0,3160,3776],[0,3160,3784],[0,3160,3792],[0,3160,3800],[0,3160,3808],[0,3160,3816],[0,3160,3824],[0,3160,3832],[0,3160,3840],[0,3160,3848],[0,3160,3856],[0,3160,3864],[0,3160,3872],[0,3160,3880],[0,3160,3888],[0,3160,3896],[0,3160,9856],[0,3160,9864],[0,3160,9872],[0,3160,9880],[0,3160,9888],[0,3160,9896],[0,3160,9904],[0,3160,9912],[0,3168,3520],[0,3168,3528],[0,3168,3536],[0,3168,3544],[0,3168,3552],[0,3168,3560],[0,3168,3568],[0,3168,3576],[0,3168,3752],[0,3168,3760],[0,3168,3768],[0,3168,3776],[0,3168,3784],[0,3168,3792],[0,3168,3800],[0,3168,3808],[0,3168,3816],[0,3168,3824],[0,3168,3832],[0,3168,3840],[0,3168,3848],[0,3168,3856],[0,3168,3864],[0,3168,3872],[0,3168,3880],[0,3168,3888],[0,3168,3896],[0,3168,9856],[0,3168,9864],[0,3168,9872],[0,3168,9880],[0,3168,9888],[0,3168,9896],[0,3168,9904],[0,3168,9912],[0,3176,3520],[0,3176,3528],[0,3176,3536],[0,3176,3544],[0,3176,3552],[0,3176,3560],[0,3176,3568],[0,3176,3576],[0,3176,3752],[0,3176,3760],[0,3176,3768],[0,3176,3776],[0,3176,3784],[0,3176,3792],[0,3176,3800],[0,3176,3808],[0,3176,3816],[0,3176,3824],[0,3176,3832],[0,3176,3840],[0,3176,3848],[0,3176,3856],[0,3176,3864],[0,3176,3872],[0,3176,3880],[0,3176,3888],[0,3176,3896],[0,3176,9856],[0,3176,9864],[0,3176,9872],[0,3176,9880],[0,3176,9888],[0,3176,9896],[0,3176,9904],[0,3176,9912],[0,3184,3520],[0,3184,3528],[0,3184,3536],[0,3184,3544],[0,3184,3552],[0,3184,3560],[0,3184,3568],[0,3184,3576],[0,3184,3752],[0,3184,3760],[0,3184,3768],[0,3184,3776],[0,3184,3784],[0,3184,3792],[0,3184,3800],[0,3184,3808],[0,3184,3816],[0,3184,3824],[0,3184,3832],[0,3184,3840],[0,3184,3848],[0,3184,3856],[0,3184,3864],[0,3184,3872],[0,3184,3880],[0,3184,3888],[0,3184,3896],[0,3184,9856],[0,3184,9864],[0,3184,9872],[0,3184,9880],[0,3184,9888],[0,3184,9896],[0,3184,9904],[0,3184,9912],[0,3192,3520],[0,3192,3528],[0,3192,3536],[0,3192,3544],[0,3192,3552],[0,3192,3560],[0,3192,3568],[0,3192,3576],[0,3192,3584],[0,3192,3592],[0,3192,3600],[0,3192,3608],[0,3192,3616],[0,3192,3624],[0,3192,3632],[0,3192,3640],[0,3192,3648],[0,3192,3656],[0,3192,3664],[0,3192,3672],[0,3192,3680],[0,3192,3688],[0,3192,3696],[0,3192,3704],[0,3192,3712],[0,3192,3720],[0,3192,3728],[0,3192,3736],[0,3192,3744],[0,3192,3752],[0,3192,3760],[0,3192,3768],[0,3192,3776],[0,3192,3784],[0,3192,3792],[0,3192,3800],[0,3192,3808],[0,3192,3816],[0,3192,3824],[0,3192,3832],[0,3192,3840],[0,3192,3848],[0,3192,3856],[0,3192,3864],[0,3192,3872],[0,3192,3880],[0,3192,3888],[0,3192,3896],[0,3192,9856],[0,3192,9864],[0,3192,9872],[0,3192,9880],[0,3192,9888],[0,3192,9896],[0,3192,9904],[0,3192,9912],[0,3200,3520],[0,3200,3528],[0,3200,3536],[0,3200,3544],[0,3200,3552],[0,3200,3560],[0,3200,3568],[0,3200,3576],[0,3200,3584],[0,3200,3592],[0,3200,3600],[0,3200,3608],[0,3200,3616],[0,3200,3624],[0,3200,3632],[0,3200,3640],[0,3200,3648],[0,3200,3656],[0,3200,3664],[0,3200,3672],[0,3200,3680],[0,3200,3688],[0,3200,3696],[0,3200,3704],[0,3200,3712],[0,3200,3720],[0,3200,3728],[0,3200,3736],[0,3200,3744],[0,3200,3752],[0,3200,3760],[0,3200,3768],[0,3200,3776],[0,3200,3784],[0,3200,3792],[0,3200,3800],[0,3200,3808],[0,3200,3816],[0,3200,3824],[0,3200,3832],[0,3200,3840],[0,3200,3848],[0,3200,3856],[0,3200,3864],[0,3200,3872],[0,3200,3880],[0,3200,3888],[0,3200,3896],[0,3200,3904],[0,3200,3912],[0,3200,3920],[0,3200,3928],[0,3200,3936],[0,3200,3944],[0,3200,3952],[0,3200,3960],[0,3200,9856],[0,3200,9864],[0,3200,9872],[0,3200,9880],[0,3200,9888],[0,3200,9896],[0,3200,9904],[0,3200,9912],[0,3208,3520],[0,3208,3528],[0,3208,3536],[0,3208,3544],[0,3208,3552],[0,3208,3560],[0,3208,3568],[0,3208,3576],[0,3208,3584],[0,3208,3592],[0,3208,3600],[0,3208,3608],[0,3208,3616],[0,3208,3624],[0,3208,3632],[0,3208,3640],[0,3208,3648],[0,3208,3656],[0,3208,3664],[0,3208,3672],[0,3208,3680],[0,3208,3688],[0,3208,3696],[0,3208,3704],[0,3208,3712],[0,3208,3720],[0,3208,3728],[0,3208,3736],[0,3208,3744],[0,3208,3752],[0,3208,3760],[0,3208,3768],[0,3208,3776],[0,3208,3784],[0,3208,3792],[0,3208,3800],[0,3208,3808],[0,3208,3816],[0,3208,3824],[0,3208,3832],[0,3208,3840],[0,3208,3848],[0,3208,3856],[0,3208,3864],[0,3208,3872],[0,3208,3880],[0,3208,3888],[0,3208,3896],[0,3208,3904],[0,3208,3912],[0,3208,3920],[0,3208,3928],[0,3208,3936],[0,3208,3944],[0,3208,3952],[0,3208,3960],[0,3208,9856],[0,3208,9864],[0,3208,9872],[0,3208,9880],[0,3208,9888],[0,3208,9896],[0,3208,9904],[0,3208,9912],[0,3216,3520],[0,3216,3528],[0,3216,3536],[0,3216,3544],[0,3216,3552],[0,3216,3560],[0,3216,3568],[0,3216,3576],[0,3216,3584],[0,3216,3592],[0,3216,3600],[0,3216,3608],[0,3216,3616],[0,3216,3624],[0,3216,3632],[0,3216,3640],[0,3216,3648],[0,3216,3656],[0,3216,3664],[0,3216,3672],[0,3216,3680],[0,3216,3688],[0,3216,3696],[0,3216,3704],[0,3216,3712],[0,3216,3720],[0,3216,3728],[0,3216,3736],[0,3216,3744],[0,3216,3752],[0,3216,3760],[0,3216,3768],[0,3216,3776],[0,3216,3784],[0,3216,3792],[0,3216,3800],[0,3216,3808],[0,3216,3816],[0,3216,3824],[0,3216,3832],[0,3216,3840],[0,3216,3848],[0,3216,3856],[0,3216,3864],[0,3216,3872],[0,3216,3880],[0,3216,3888],[0,3216,3896],[0,3216,3904],[0,3216,3912],[0,3216,3920],[0,3216,3928],[0,3216,3936],[0,3216,3944],[0,3216,3952],[0,3216,3960],[0,3216,9856],[0,3216,9864],[0,3216,9872],[0,3216,9880],[0,3216,9888],[0,3216,9896],[0,3216,9904],[0,3216,9912],[0,3224,3520],[0,3224,3528],[0,3224,3536],[0,3224,3544],[0,3224,3552],[0,3224,3560],[0,3224,3568],[0,3224,3576],[0,3224,3584],[0,3224,3592],[0,3224,3600],[0,3224,3608],[0,3224,3616],[0,3224,3624],[0,3224,3632],[0,3224,3640],[0,3224,3648],[0,3224,3656],[0,3224,3664],[0,3224,3672],[0,3224,3680],[0,3224,3688],[0,3224,3696],[0,3224,3704],[0,3224,3712],[0,3224,3720],[0,3224,3728],[0,3224,3736],[0,3224,3744],[0,3224,3752],[0,3224,3760],[0,3224,3768],[0,3224,3776],[0,3224,3784],[0,3224,3792],[0,3224,3800],[0,3224,3808],[0,3224,3816],[0,3224,3824],[0,3224,3832],[0,3224,3840],[0,3224,3848],[0,3224,3856],[0,3224,3864],[0,3224,3872],[0,3224,3880],[0,3224,3888],[0,3224,3896],[0,3224,3904],[0,3224,3912],[0,3224,3920],[0,3224,3928],[0,3224,3936],[0,3224,3944],[0,3224,3952],[0,3224,3960],[0,3224,9856],[0,3224,9864],[0,3224,9872],[0,3224,9880],[0,3224,9888],[0,3224,9896],[0,3224,9904],[0,3224,9912],[0,3232,3520],[0,3232,3528],[0,3232,3536],[0,3232,3544],[0,3232,3552],[0,3232,3560],[0,3232,3568],[0,3232,3576],[0,3232,3584],[0,3232,3592],[0,3232,3600],[0,3232,3608],[0,3232,3616],[0,3232,3624],[0,3232,3632],[0,3232,3640],[0,3232,3648],[0,3232,3656],[0,3232,3664],[0,3232,3672],[0,3232,3680],[0,3232,3688],[0,3232,3696],[0,3232,3704],[0,3232,3712],[0,3232,3720],[0,3232,3728],[0,3232,3736],[0,3232,3744],[0,3232,3752],[0,3232,3760],[0,3232,3768],[0,3232,3776],[0,3232,3784],[0,3232,3792],[0,3232,3800],[0,3232,3808],[0,3232,3816],[0,3232,3824],[0,3232,3832],[0,3232,3840],[0,3232,3848],[0,3232,3856],[0,3232,3864],[0,3232,3872],[0,3232,3880],[0,3232,3888],[0,3232,3896],[0,3232,3904],[0,3232,3912],[0,3232,3920],[0,3232,3928],[0,3232,3936],[0,3232,3944],[0,3232,3952],[0,3232,3960],[0,3232,9856],[0,3232,9864],[0,3232,9872],[0,3232,9880],[0,3232,9888],[0,3232,9896],[0,3232,9904],[0,3232,9912],[0,3240,3520],[0,3240,3528],[0,3240,3536],[0,3240,3544],[0,3240,3552],[0,3240,3560],[0,3240,3568],[0,3240,3576],[0,3240,3584],[0,3240,3592],[0,3240,3600],[0,3240,3608],[0,3240,3616],[0,3240,3624],[0,3240,3632],[0,3240,3640],[0,3240,3648],[0,3240,3656],[0,3240,3664],[0,3240,3672],[0,3240,3680],[0,3240,3688],[0,3240,3696],[0,3240,3704],[0,3240,3712],[0,3240,3720],[0,3240,3728],[0,3240,3736],[0,3240,3744],[0,3240,3752],[0,3240,3760],[0,3240,3768],[0,3240,3776],[0,3240,3784],[0,3240,3800],[0,3240,3808],[0,3240,3816],[0,3240,3824],[0,3240,3832],[0,3240,3840],[0,3240,3848],[0,3240,3856],[0,3240,3864],[0,3240,3872],[0,3240,3880],[0,3240,3888],[0,3240,3896],[0,3240,3904],[0,3240,3912],[0,3240,3920],[0,3240,3928],[0,3240,3936],[0,3240,3944],[0,3240,3952],[0,3240,3960],[0,3240,9856],[0,3240,9864],[0,3240,9872],[0,3240,9880],[0,3240,9888],[0,3240,9896],[0,3240,9904],[0,3240,9912],[0,3248,3520],[0,3248,3528],[0,3248,3536],[0,3248,3544],[0,3248,3552],[0,3248,3560],[0,3248,3568],[0,3248,3576],[0,3248,3584],[0,3248,3592],[0,3248,3600],[0,3248,3608],[0,3248,3616],[0,3248,3624],[0,3248,3632],[0,3248,3640],[0,3248,3648],[0,3248,3656],[0,3248,3664],[0,3248,3672],[0,3248,3680],[0,3248,3688],[0,3248,3696],[0,3248,3704],[0,3248,3712],[0,3248,3720],[0,3248,3728],[0,3248,3736],[0,3248,3744],[0,3248,3752],[0,3248,3760],[0,3248,3768],[0,3248,3776],[0,3248,3784],[0,3248,3792],[0,3248,3800],[0,3248,3808],[0,3248,3816],[0,3248,3824],[0,3248,3832],[0,3248,3840],[0,3248,3848],[0,3248,3856],[0,3248,3864],[0,3248,3872],[0,3248,3880],[0,3248,3888],[0,3248,3896],[0,3248,3904],[0,3248,3912],[0,3248,3920],[0,3248,3928],[0,3248,3936],[0,3248,3944],[0,3248,3952],[0,3248,3960],[0,3248,9856],[0,3248,9864],[0,3248,9872],[0,3248,9880],[0,3248,9888],[0,3248,9896],[0,3248,9904],[0,3248,9912],[0,3256,3520],[0,3256,3528],[0,3256,3536],[0,3256,3544],[0,3256,3552],[0,3256,3560],[0,3256,3568],[0,3256,3576],[0,3256,3584],[0,3256,3592],[0,3256,3600],[0,3256,3608],[0,3256,3616],[0,3256,3624],[0,3256,3632],[0,3256,3640],[0,3256,3648],[0,3256,3656],[0,3256,3664],[0,3256,3672],[0,3256,3680],[0,3256,3688],[0,3256,3696],[0,3256,3704],[0,3256,3712],[0,3256,3720],[0,3256,3728],[0,3256,3736],[0,3256,3744],[0,3256,3752],[0,3256,3760],[0,3256,3768],[0,3256,3776],[0,3256,3784],[0,3256,3792],[0,3256,3800],[0,3256,3808],[0,3256,3816],[0,3256,3824],[0,3256,3832],[0,3256,3840],[0,3256,3848],[0,3256,3856],[0,3256,3864],[0,3256,3872],[0,3256,3880],[0,3256,3888],[0,3256,3896],[0,3256,3904],[0,3256,3912],[0,3256,3920],[0,3256,3928],[0,3256,3936],[0,3256,3944],[0,3256,3952],[0,3256,3960],[0,3256,9856],[0,3256,9864],[0,3256,9872],[0,3256,9880],[0,3256,9888],[0,3256,9896],[0,3256,9904],[0,3256,9912],[0,3264,3136],[0,3264,3144],[0,3264,3152],[0,3264,3160],[0,3264,3168],[0,3264,3176],[0,3264,3184],[0,3264,3192],[0,3264,3520],[0,3264,3528],[0,3264,3536],[0,3264,3544],[0,3264,3552],[0,3264,3560],[0,3264,3568],[0,3264,3576],[0,3264,3584],[0,3264,3592],[0,3264,3600],[0,3264,3608],[0,3264,3616],[0,3264,3624],[0,3264,3632],[0,3264,3640],[0,3264,3648],[0,3264,3656],[0,3264,3664],[0,3264,3672],[0,3264,3680],[0,3264,3688],[0,3264,3696],[0,3264,3704],[0,3264,3712],[0,3264,3720],[0,3264,3728],[0,3264,3736],[0,3264,3744],[0,3264,3752],[0,3264,3760],[0,3264,3768],[0,3264,3776],[0,3264,3784],[0,3264,3792],[0,3264,3800],[0,3264,3808],[0,3264,3816],[0,3264,3824],[0,3264,3832],[0,3264,3840],[0,3264,3848],[0,3264,3856],[0,3264,3864],[0,3264,3872],[0,3264,3880],[0,3264,3888],[0,3264,3896],[0,3264,3904],[0,3264,3912],[0,3264,3920],[0,3264,3928],[0,3264,3936],[0,3264,3944],[0,3264,3952],[0,3264,3960],[0,3264,9856],[0,3264,9864],[0,3264,9872],[0,3264,9880],[0,3264,9888],[0,3264,9896],[0,3264,9904],[0,3264,9912],[0,3272,3136],[0,3272,3144],[0,3272,3152],[0,3272,3160],[0,3272,3168],[0,3272,3176],[0,3272,3184],[0,3272,3192],[0,3272,3520],[0,3272,3528],[0,3272,3536],[0,3272,3544],[0,3272,3552],[0,3272,3560],[0,3272,3568],[0,3272,3576],[0,3272,3584],[0,3272,3592],[0,3272,3600],[0,3272,3608],[0,3272,3616],[0,3272,3624],[0,3272,3632],[0,3272,3640],[0,3272,3648],[0,3272,3656],[0,3272,3664],[0,3272,3672],[0,3272,3680],[0,3272,3688],[0,3272,3696],[0,3272,3704],[0,3272,3712],[0,3272,3720],[0,3272,3728],[0,3272,3736],[0,3272,3744],[0,3272,3752],[0,3272,3760],[0,3272,3768],[0,3272,3776],[0,3272,3784],[0,3272,3792],[0,3272,3800],[0,3272,3808],[0,3272,3816],[0,3272,3824],[0,3272,3832],[0,3272,3840],[0,3272,3848],[0,3272,3856],[0,3272,3864],[0,3272,3872],[0,3272,3880],[0,3272,3888],[0,3272,3896],[0,3272,3904],[0,3272,3912],[0,3272,3920],[0,3272,3928],[0,3272,3936],[0,3272,3944],[0,3272,3952],[0,3272,3960],[0,3272,9856],[0,3272,9864],[0,3272,9872],[0,3272,9880],[0,3272,9888],[0,3272,9896],[0,3272,9904],[0,3272,9912],[0,3280,3136],[0,3280,3144],[0,3280,3152],[0,3280,3160],[0,3280,3168],[0,3280,3176],[0,3280,3184],[0,3280,3192],[0,3280,3520],[0,3280,3528],[0,3280,3536],[0,3280,3544],[0,3280,3552],[0,3280,3560],[0,3280,3568],[0,3280,3576],[0,3280,3584],[0,3280,3592],[0,3280,3600],[0,3280,3608],[0,3280,3616],[0,3280,3624],[0,3280,3632],[0,3280,3640],[0,3280,3648],[0,3280,3656],[0,3280,3664],[0,3280,3672],[0,3280,3680],[0,3280,3688],[0,3280,3696],[0,3280,3704],[0,3280,3712],[0,3280,3720],[0,3280,3728],[0,3280,3736],[0,3280,3744],[0,3280,3752],[0,3280,3760],[0,3280,3768],[0,3280,3776],[0,3280,3784],[0,3280,3792],[0,3280,3800],[0,3280,3808],[0,3280,3816],[0,3280,3824],[0,3280,3832],[0,3280,3840],[0,3280,3848],[0,3280,3856],[0,3280,3864],[0,3280,3872],[0,3280,3880],[0,3280,3888],[0,3280,3896],[0,3280,3904],[0,3280,3912],[0,3280,3920],[0,3280,3928],[0,3280,3936],[0,3280,3944],[0,3280,3952],[0,3280,3960],[0,3280,9856],[0,3280,9864],[0,3280,9872],[0,3280,9880],[0,3280,9888],[0,3280,9896],[0,3280,9904],[0,3280,9912],[0,3288,3136],[0,3288,3144],[0,3288,3152],[0,3288,3160],[0,3288,3168],[0,3288,3176],[0,3288,3184],[0,3288,3192],[0,3288,3520],[0,3288,3528],[0,3288,3536],[0,3288,3544],[0,3288,3552],[0,3288,3560],[0,3288,3568],[0,3288,3576],[0,3288,3584],[0,3288,3592],[0,3288,3600],[0,3288,3608],[0,3288,3616],[0,3288,3624],[0,3288,3632],[0,3288,3640],[0,3288,3648],[0,3288,3656],[0,3288,3664],[0,3288,3672],[0,3288,3680],[0,3288,3688],[0,3288,3696],[0,3288,3704],[0,3288,3712],[0,3288,3720],[0,3288,3728],[0,3288,3736],[0,3288,3744],[0,3288,3752],[0,3288,3760],[0,3288,3768],[0,3288,3776],[0,3288,3784],[0,3288,3792],[0,3288,3800],[0,3288,3808],[0,3288,3816],[0,3288,3824],[0,3288,3832],[0,3288,3840],[0,3288,3848],[0,3288,3856],[0,3288,3864],[0,3288,3872],[0,3288,3880],[0,3288,3888],[0,3288,3896],[0,3288,3904],[0,3288,3912],[0,3288,3920],[0,3288,3928],[0,3288,3936],[0,3288,3944],[0,3288,3952],[0,3288,3960],[0,3288,9856],[0,3288,9864],[0,3288,9872],[0,3288,9880],[0,3288,9888],[0,3288,9896],[0,3288,9904],[0,3288,9912],[0,3296,3136],[0,3296,3144],[0,3296,3152],[0,3296,3160],[0,3296,3168],[0,3296,3176],[0,3296,3184],[0,3296,3192],[0,3296,3520],[0,3296,3528],[0,3296,3536],[0,3296,3544],[0,3296,3552],[0,3296,3560],[0,3296,3568],[0,3296,3576],[0,3296,3584],[0,3296,3592],[0,3296,3600],[0,3296,3608],[0,3296,3616],[0,3296,3624],[0,3296,3632],[0,3296,3640],[0,3296,3648],[0,3296,3656],[0,3296,3664],[0,3296,3672],[0,3296,3680],[0,3296,3688],[0,3296,3696],[0,3296,3704],[0,3296,3712],[0,3296,3720],[0,3296,3728],[0,3296,3736],[0,3296,3744],[0,3296,3752],[0,3296,3760],[0,3296,3768],[0,3296,3776],[0,3296,3784],[0,3296,3792],[0,3296,3800],[0,3296,3808],[0,3296,3816],[0,3296,3824],[0,3296,3832],[0,3296,3840],[0,3296,3848],[0,3296,3856],[0,3296,3864],[0,3296,3872],[0,3296,3880],[0,3296,3888],[0,3296,3896],[0,3296,3904],[0,3296,3912],[0,3296,3920],[0,3296,3928],[0,3296,3936],[0,3296,3944],[0,3296,3952],[0,3296,3960],[0,3304,3136],[0,3304,3144],[0,3304,3152],[0,3304,3160],[0,3304,3168],[0,3304,3176],[0,3304,3184],[0,3304,3192],[0,3304,3520],[0,3304,3528],[0,3304,3536],[0,3304,3544],[0,3304,3552],[0,3304,3560],[0,3304,3568],[0,3304,3576],[0,3304,3584],[0,3304,3592],[0,3304,3600],[0,3304,3608],[0,3304,3616],[0,3304,3624],[0,3304,3632],[0,3304,3640],[0,3304,3648],[0,3304,3656],[0,3304,3664],[0,3304,3672],[0,3304,3680],[0,3304,3688],[0,3304,3696],[0,3304,3704],[0,3304,3712],[0,3304,3720],[0,3304,3728],[0,3304,3736],[0,3304,3744],[0,3304,3752],[0,3304,3760],[0,3304,3768],[0,3304,3776],[0,3304,3784],[0,3304,3792],[0,3304,3800],[0,3304,3808],[0,3304,3816],[0,3304,3824],[0,3304,3832],[0,3304,3840],[0,3304,3848],[0,3304,3856],[0,3304,3864],[0,3304,3872],[0,3304,3880],[0,3304,3888],[0,3304,3896],[0,3304,3904],[0,3304,3912],[0,3304,3920],[0,3304,3928],[0,3304,3936],[0,3304,3944],[0,3304,3952],[0,3304,3960],[0,3312,3136],[0,3312,3144],[0,3312,3152],[0,3312,3160],[0,3312,3168],[0,3312,3176],[0,3312,3184],[0,3312,3192],[0,3312,3520],[0,3312,3528],[0,3312,3536],[0,3312,3544],[0,3312,3552],[0,3312,3560],[0,3312,3568],[0,3312,3576],[0,3312,3584],[0,3312,3592],[0,3312,3600],[0,3312,3608],[0,3312,3616],[0,3312,3624],[0,3312,3632],[0,3312,3640],[0,3312,3648],[0,3312,3656],[0,3312,3664],[0,3312,3672],[0,3312,3680],[0,3312,3688],[0,3312,3696],[0,3312,3704],[0,3312,3712],[0,3312,3720],[0,3312,3728],[0,3312,3736],[0,3312,3744],[0,3312,3752],[0,3312,3760],[0,3312,3768],[0,3312,3776],[0,3312,3784],[0,3312,3792],[0,3312,3800],[0,3312,3808],[0,3312,3816],[0,3312,3824],[0,3312,3832],[0,3312,3840],[0,3312,3848],[0,3312,3856],[0,3312,3864],[0,3312,3872],[0,3312,3880],[0,3312,3888],[0,3312,3896],[0,3312,3904],[0,3312,3912],[0,3312,3920],[0,3312,3928],[0,3312,3936],[0,3312,3944],[0,3312,3952],[0,3312,3960],[0,3320,3136],[0,3320,3144],[0,3320,3152],[0,3320,3160],[0,3320,3168],[0,3320,3176],[0,3320,3184],[0,3320,3192],[0,3320,3520],[0,3320,3528],[0,3320,3536],[0,3320,3544],[0,3320,3552],[0,3320,3560],[0,3320,3568],[0,3320,3576],[0,3320,3584],[0,3320,3592],[0,3320,3600],[0,3320,3608],[0,3320,3616],[0,3320,3624],[0,3320,3632],[0,3320,3640],[0,3320,3648],[0,3320,3656],[0,3320,3664],[0,3320,3672],[0,3320,3680],[0,3320,3688],[0,3320,3696],[0,3320,3704],[0,3320,3712],[0,3320,3720],[0,3320,3728],[0,3320,3736],[0,3320,3744],[0,3320,3752],[0,3320,3760],[0,3320,3768],[0,3320,3776],[0,3320,3784],[0,3320,3792],[0,3320,3800],[0,3320,3808],[0,3320,3816],[0,3320,3824],[0,3320,3832],[0,3320,3840],[0,3320,3848],[0,3320,3856],[0,3320,3864],[0,3320,3872],[0,3320,3880],[0,3320,3888],[0,3320,3896],[0,3320,3904],[0,3320,3912],[0,3320,3920],[0,3320,3928],[0,3320,3936],[0,3320,3944],[0,3320,3952],[0,3320,3960],[0,3456,9472],[0,3456,9480],[0,3456,9488],[0,3456,9496],[0,3456,9504],[0,3456,9512],[0,3456,9520],[0,3456,9528],[0,3464,9472],[0,3464,9480],[0,3464,9488],[0,3464,9496],[0,3464,9504],[0,3464,9512],[0,3464,9520],[0,3464,9528],[0,3472,9472],[0,3472,9480],[0,3472,9488],[0,3472,9496],[0,3472,9504],[0,3472,9512],[0,3472,9520],[0,3472,9528],[0,3480,9472],[0,3480,9480],[0,3480,9488],[0,3480,9496],[0,3480,9504],[0,3480,9512],[0,3480,9520],[0,3480,9528],[0,3488,9472],[0,3488,9480],[0,3488,9488],[0,3488,9496],[0,3488,9504],[0,3488,9512],[0,3488,9520],[0,3488,9528],[0,3496,9472],[0,3496,9480],[0,3496,9488],[0,3496,9496],[0,3496,9504],[0,3496,9512],[0,3496,9520],[0,3496,9528],[0,3504,9472],[0,3504,9480],[0,3504,9488],[0,3504,9496],[0,3504,9504],[0,3504,9512],[0,3504,9520],[0,3504,9528],[0,3512,9472],[0,3512,9480],[0,3512,9488],[0,3512,9496],[0,3512,9504],[0,3512,9512],[0,3512,9520],[0,3512,9528],[1,2656,3232],[1,2656,3240],[1,2656,3248],[1,2664,3232],[1,2664,3240],[1,2664,3248],[1,2672,3232],[1,2672,3240],[1,2672,3248],[1,2944,3304],[1,2944,3312],[1,2944,3320],[1,2944,3328],[1,2944,3336],[1,2944,3344],[1,2944,3352],[1,2944,3360],[1,2944,3368],[1,2944,3376],[1,2944,3384],[1,2944,3392],[1,2944,3400],[1,2944,3408],[1,2944,3416],[1,2944,3424],[1,2944,3432],[1,2944,3440],[1,2944,3448],[1,2952,3304],[1,2952,3312],[1,2952,3320],[1,2952,3328],[1,2952,3336],[1,2952,3344],[1,2952,3352],[1,2952,3360],[1,2952,3368],[1,2952,3376],[1,2952,3384],[1,2952,3392],[1,2952,3400],[1,2952,3408],[1,2952,3416],[1,2952,3424],[1,2952,3432],[1,2952,3440],[1,2952,3448],[1,2960,3304],[1,2960,3312],[1,2960,3320],[1,2960,3328],[1,2960,3336],[1,2960,3344],[1,2960,3352],[1,2960,3360],[1,2960,3368],[1,2960,3376],[1,2960,3384],[1,2960,3392],[1,2960,3400],[1,2960,3408],[1,2960,3416],[1,2960,3424],[1,2960,3432],[1,2960,3440],[1,2960,3448],[1,2968,3304],[1,2968,3312],[1,2968,3320],[1,2968,3328],[1,2968,3336],[1,2968,3344],[1,2968,3352],[1,2968,3360],[1,2968,3368],[1,2968,3376],[1,2968,3384],[1,2968,3392],[1,2968,3400],[1,2968,3408],[1,2968,3416],[1,2968,3424],[1,2968,3432],[1,2968,3440],[1,2968,3448],[1,2976,3304],[1,2976,3312],[1,2976,3320],[1,2976,3328],[1,2976,3336],[1,2976,3344],[1,2976,3352],[1,2976,3360],[1,2976,3368],[1,2976,3376],[1,2976,3384],[1,2976,3392],[1,2976,3400],[1,2976,3408],[1,2976,3416],[1,2976,3424],[1,2976,3432],[1,2976,3440],[1,2976,3448],[1,2984,3304],[1,2984,3312],[1,2984,3320],[1,2984,3328],[1,2984,3336],[1,2984,3344],[1,2984,3352],[1,2984,3360],[1,2984,3368],[1,2984,3376],[1,2984,3384],[1,2984,3392],[1,2984,3400],[1,2984,3408],[1,2984,3416],[1,2984,3424],[1,2984,3432],[1,2984,3440],[1,2984,3448],[1,2992,3304],[1,2992,3312],[1,2992,3320],[1,2992,3328],[1,2992,3336],[1,2992,3344],[1,2992,3352],[1,2992,3360],[1,2992,3368],[1,2992,3376],[1,2992,3384],[1,2992,3392],[1,2992,3400],[1,2992,3408],[1,2992,3416],[1,2992,3424],[1,2992,3432],[1,2992,3440],[1,2992,3448],[1,3000,3304],[1,3000,3312],[1,3000,3320],[1,3000,3328],[1,3000,3336],[1,3000,3344],[1,3000,3352],[1,3000,3360],[1,3000,3368],[1,3000,3376],[1,3000,3384],[1,3000,3392],[1,3000,3400],[1,3000,3408],[1,3000,3416],[1,3000,3424],[1,3000,3432],[1,3000,3440],[1,3000,3448],[1,3008,3600],[1,3008,3608],[1,3008,3616],[1,3008,3624],[1,3008,3632],[1,3008,3640],[1,3016,3600],[1,3016,3608],[1,3016,3616],[1,3016,3624],[1,3016,3632],[1,3016,3640],[1,3024,3600],[1,3024,3608],[1,3024,3616],[1,3024,3624],[1,3024,3632],[1,3024,3640],[1,3032,3600],[1,3032,3608],[1,3032,3616],[1,3032,3624],[1,3032,3632],[1,3032,3640],[1,3040,3600],[1,3040,3608],[1,3040,3616],[1,3040,3624],[1,3040,3632],[1,3040,3640],[1,3048,3600],[1,3048,3608],[1,3048,3616],[1,3048,3624],[1,3048,3632],[1,3048,3640],[1,3056,3600],[1,3056,3608],[1,3056,3616],[1,3056,3624],[1,3056,3632],[1,3056,3640],[1,3064,3600],[1,3064,3608],[1,3064,3616],[1,3064,3624],[1,3064,3632],[1,3064,3640],[1,3096,3144],[1,3096,3152],[1,3096,3160],[1,3096,3168],[1,3104,3144],[1,3104,3152],[1,3104,3160],[1,3104,3168],[1,3112,3144],[1,3112,3152],[1,3112,3160],[1,3112,3168],[1,3120,3144],[1,3120,3152],[1,3120,3160],[1,3120,3168],[1,3264,3136],[1,3264,3144],[1,3264,3152],[1,3264,3160],[1,3264,3168],[1,3264,3176],[1,3264,3184],[1,3264,3192],[1,3264,3904],[1,3264,3912],[1,3264,3920],[1,3264,3928],[1,3264,3936],[1,3264,3944],[1,3264,3952],[1,3264,3960],[1,3272,3136],[1,3272,3144],[1,3272,3152],[1,3272,3160],[1,3272,3168],[1,3272,3176],[1,3272,3184],[1,3272,3192],[1,3272,3904],[1,3272,3912],[1,3272,3920],[1,3272,3928],[1,3272,3936],[1,3272,3944],[1,3272,3952],[1,3272,3960],[1,3280,3136],[1,3280,3144],[1,3280,3152],[1,3280,3160],[1,3280,3168],[1,3280,3176],[1,3280,3184],[1,3280,3192],[1,3280,3904],[1,3280,3912],[1,3280,3920],[1,3280,3928],[1,3280,3936],[1,3280,3944],[1,3280,3952],[1,3280,3960],[1,3288,3136],[1,3288,3144],[1,3288,3152],[1,3288,3160],[1,3288,3168],[1,3288,3176],[1,3288,3184],[1,3288,3192],[1,3288,3904],[1,3288,3912],[1,3288,3920],[1,3288,3928],[1,3288,3936],[1,3288,3944],[1,3288,3952],[1,3288,3960],[1,3296,3136],[1,3296,3144],[1,3296,3152],[1,3296,3160],[1,3296,3168],[1,3296,3176],[1,3296,3184],[1,3296,3192],[1,3296,3904],[1,3296,3912],[1,3296,3920],[1,3296,3928],[1,3296,3936],[1,3296,3944],[1,3296,3952],[1,3296,3960],[1,3304,3136],[1,3304,3144],[1,3304,3152],[1,3304,3160],[1,3304,3168],[1,3304,3176],[1,3304,3184],[1,3304,3192],[1,3304,3904],[1,3304,3912],[1,3304,3920],[1,3304,3928],[1,3304,3936],[1,3304,3944],[1,3304,3952],[1,3304,3960],[1,3312,3136],[1,3312,3144],[1,3312,3152],[1,3312,3160],[1,3312,3168],[1,3312,3176],[1,3312,3184],[1,3312,3192],[1,3312,3904],[1,3312,3912],[1,3312,3920],[1,3312,3928],[1,3312,3936],[1,3312,3944],[1,3312,3952],[1,3312,3960],[1,3320,3136],[1,3320,3144],[1,3320,3152],[1,3320,3160],[1,3320,3168],[1,3320,3176],[1,3320,3184],[1,3320,3192],[1,3320,3904],[1,3320,3912],[1,3320,3920],[1,3320,3928],[1,3320,3936],[1,3320,3944],[1,3320,3952],[1,3320,3960],[2,2648,3416],[2,2648,3424],[2,2648,3432],[2,2656,3408],[2,2656,3416],[2,2656,3424],[2,2656,3432],[2,2656,3440],[2,2664,3408],[2,2664,3416],[2,2664,3424],[2,2664,3432],[2,2664,3440],[2,2672,3408],[2,2672,3416],[2,2672,3424],[2,2672,3432],[2,2672,3440],[2,2680,3416],[2,2680,3424],[2,2680,3432],[2,2944,3304],[2,2944,3312],[2,2944,3320],[2,2944,3328],[2,2944,3336],[2,2944,3344],[2,2944,3352],[2,2944,3360],[2,2944,3368],[2,2944,3376],[2,2944,3384],[2,2944,3392],[2,2944,3400],[2,2944,3408],[2,2944,3416],[2,2944,3424],[2,2944,3432],[2,2944,3440],[2,2944,3448],[2,2952,3304],[2,2952,3312],[2,2952,3320],[2,2952,3328],[2,2952,3336],[2,2952,3344],[2,2952,3352],[2,2952,3360],[2,2952,3368],[2,2952,3376],[2,2952,3384],[2,2952,3392],[2,2952,3400],[2,2952,3408],[2,2952,3416],[2,2952,3424],[2,2952,3432],[2,2952,3440],[2,2952,3448],[2,2960,3304],[2,2960,3312],[2,2960,3320],[2,2960,3328],[2,2960,3336],[2,2960,3344],[2,2960,3352],[2,2960,3360],[2,2960,3368],[2,2960,3376],[2,2960,3384],[2,2960,3392],[2,2960,3400],[2,2960,3408],[2,2960,3416],[2,2960,3424],[2,2960,3432],[2,2960,3440],[2,2960,3448],[2,2968,3304],[2,2968,3312],[2,2968,3320],[2,2968,3328],[2,2968,3336],[2,2968,3344],[2,2968,3352],[2,2968,3360],[2,2968,3368],[2,2968,3376],[2,2968,3384],[2,2968,3392],[2,2968,3400],[2,2968,3408],[2,2968,3416],[2,2968,3424],[2,2968,3432],[2,2968,3440],[2,2968,3448],[2,2976,3304],[2,2976,3312],[2,2976,3320],[2,2976,3328],[2,2976,3336],[2,2976,3344],[2,2976,3352],[2,2976,3360],[2,2976,3368],[2,2976,3376],[2,2976,3384],[2,2976,3392],[2,2976,3400],[2,2976,3408],[2,2976,3416],[2,2976,3424],[2,2976,3432],[2,2976,3440],[2,2976,3448],[2,2984,3304],[2,2984,3312],[2,2984,3320],[2,2984,3328],[2,2984,3336],[2,2984,3344],[2,2984,3352],[2,2984,3360],[2,2984,3368],[2,2984,3376],[2,2984,3384],[2,2984,3392],[2,2984,3400],[2,2984,3408],[2,2984,3416],[2,2984,3424],[2,2984,3432],[2,2984,3440],[2,2984,3448],[2,2992,3304],[2,2992,3312],[2,2992,3320],[2,2992,3328],[2,2992,3336],[2,2992,3344],[2,2992,3352],[2,2992,3360],[2,2992,3368],[2,2992,3376],[2,2992,3384],[2,2992,3392],[2,2992,3400],[2,2992,3408],[2,2992,3416],[2,2992,3424],[2,2992,3432],[2,2992,3440],[2,2992,3448],[2,3000,3304],[2,3000,3312],[2,3000,3320],[2,3000,3328],[2,3000,3336],[2,3000,3344],[2,3000,3352],[2,3000,3360],[2,3000,3368],[2,3000,3376],[2,3000,3384],[2,3000,3392],[2,3000,3400],[2,3000,3408],[2,3000,3416],[2,3000,3424],[2,3000,3432],[2,3000,3440],[2,3000,3448],[2,3008,3600],[2,3008,3608],[2,3008,3616],[2,3008,3624],[2,3008,3632],[2,3008,3640],[2,3016,3600],[2,3016,3608],[2,3016,3616],[2,3016,3624],[2,3016,3632],[2,3016,3640],[2,3024,3600],[2,3024,3608],[2,3024,3616],[2,3024,3624],[2,3024,3632],[2,3024,3640],[2,3032,3600],[2,3032,3608],[2,3032,3616],[2,3032,3624],[2,3032,3632],[2,3032,3640],[2,3040,3600],[2,3040,3608],[2,3040,3616],[2,3040,3624],[2,3040,3632],[2,3040,3640],[2,3048,3600],[2,3048,3608],[2,3048,3616],[2,3048,3624],[2,3048,3632],[2,3048,3640],[2,3056,3600],[2,3056,3608],[2,3056,3616],[2,3056,3624],[2,3056,3632],[2,3056,3640],[2,3064,3600],[2,3064,3608],[2,3064,3616],[2,3064,3624],[2,3064,3632],[2,3064,3640],[2,3096,3144],[2,3096,3152],[2,3096,3160],[2,3096,3168],[2,3104,3144],[2,3104,3152],[2,3104,3160],[2,3104,3168],[2,3112,3144],[2,3112,3152],[2,3112,3160],[2,3112,3168],[2,3120,3144],[2,3120,3152],[2,3120,3160],[2,3120,3168],[2,3264,3904],[2,3264,3912],[2,3264,3920],[2,3264,3928],[2,3264,3936],[2,3264,3944],[2,3264,3952],[2,3264,3960],[2,3272,3904],[2,3272,3912],[2,3272,3920],[2,3272,3928],[2,3272,3936],[2,3272,3944],[2,3272,3952],[2,3272,3960],[2,3280,3904],[2,3280,3912],[2,3280,3920],[2,3280,3928],[2,3280,3936],[2,3280,3944],[2,3280,3952],[2,3280,3960],[2,3288,3904],[2,3288,3912],[2,3288,3920],[2,3288,3928],[2,3288,3936],[2,3288,3944],[2,3288,3952],[2,3288,3960],[2,3296,3904],[2,3296,3912],[2,3296,3920],[2,3296,3928],[2,3296,3936],[2,3296,3944],[2,3296,3952],[2,3296,3960],[2,3304,3904],[2,3304,3912],[2,3304,3920],[2,3304,3928],[2,3304,3936],[2,3304,3944],[2,3304,3952],[2,3304,3960],[2,3312,3904],[2,3312,3912],[2,3312,3920],[2,3312,3928],[2,3312,3936],[2,3312,3944],[2,3312,3952],[2,3312,3960],[2,3320,3904],[2,3320,3912],[2,3320,3920],[2,3320,3928],[2,3320,3936],[2,3320,3944],[2,3320,3952],[2,3320,3960],[2,3456,9472],[2,3456,9480],[2,3456,9488],[2,3456,9496],[2,3456,9504],[2,3456,9512],[2,3456,9520],[2,3456,9528],[2,3464,9472],[2,3464,9480],[2,3464,9488],[2,3464,9496],[2,3464,9504],[2,3464,9512],[2,3464,9520],[2,3464,9528],[2,3472,9472],[2,3472,9480],[2,3472,9488],[2,3472,9496],[2,3472,9504],[2,3472,9512],[2,3472,9520],[2,3472,9528],[2,3480,9472],[2,3480,9480],[2,3480,9488],[2,3480,9496],[2,3480,9504],[2,3480,9512],[2,3480,9520],[2,3480,9528],[2,3488,9472],[2,3488,9480],[2,3488,9488],[2,3488,9496],[2,3488,9504],[2,3488,9512],[2,3488,9520],[2,3488,9528],[2,3496,9472],[2,3496,9480],[2,3496,9488],[2,3496,9496],[2,3496,9504],[2,3496,9512],[2,3496,9520],[2,3496,9528],[2,3504,9472],[2,3504,9480],[2,3504,9488],[2,3504,9496],[2,3504,9504],[2,3504,9512],[2,3504,9520],[2,3504,9528],[2,3512,9472],[2,3512,9480],[2,3512,9488],[2,3512,9496],[2,3512,9504],[2,3512,9512],[2,3512,9520],[2,3512,9528],[3,2944,3304],[3,2944,3312],[3,2944,3320],[3,2944,3328],[3,2944,3336],[3,2944,3344],[3,2944,3352],[3,2944,3360],[3,2944,3368],[3,2944,3376],[3,2944,3384],[3,2944,3392],[3,2944,3400],[3,2944,3408],[3,2944,3416],[3,2944,3424],[3,2944,3432],[3,2944,3440],[3,2944,3448],[3,2952,3304],[3,2952,3312],[3,2952,3320],[3,2952,3328],[3,2952,3336],[3,2952,3344],[3,2952,3352],[3,2952,3360],[3,2952,3368],[3,2952,3376],[3,2952,3384],[3,2952,3392],[3,2952,3400],[3,2952,3408],[3,2952,3416],[3,2952,3424],[3,2952,3432],[3,2952,3440],[3,2952,3448],[3,2960,3304],[3,2960,3312],[3,2960,3320],[3,2960,3328],[3,2960,3336],[3,2960,3344],[3,2960,3352],[3,2960,3360],[3,2960,3368],[3,2960,3376],[3,2960,3384],[3,2960,3392],[3,2960,3400],[3,2960,3408],[3,2960,3416],[3,2960,3424],[3,2960,3432],[3,2960,3440],[3,2960,3448],[3,2968,3304],[3,2968,3312],[3,2968,3320],[3,2968,3328],[3,2968,3336],[3,2968,3344],[3,2968,3352],[3,2968,3360],[3,2968,3368],[3,2968,3376],[3,2968,3384],[3,2968,3392],[3,2968,3400],[3,2968,3408],[3,2968,3416],[3,2968,3424],[3,2968,3432],[3,2968,3440],[3,2968,3448],[3,2976,3304],[3,2976,3312],[3,2976,3320],[3,2976,3328],[3,2976,3336],[3,2976,3344],[3,2976,3352],[3,2976,3360],[3,2976,3368],[3,2976,3376],[3,2976,3384],[3,2976,3392],[3,2976,3400],[3,2976,3408],[3,2976,3416],[3,2976,3424],[3,2976,3432],[3,2976,3440],[3,2976,3448],[3,2984,3304],[3,2984,3312],[3,2984,3320],[3,2984,3328],[3,2984,3336],[3,2984,3344],[3,2984,3352],[3,2984,3360],[3,2984,3368],[3,2984,3376],[3,2984,3384],[3,2984,3392],[3,2984,3400],[3,2984,3408],[3,2984,3416],[3,2984,3424],[3,2984,3432],[3,2984,3440],[3,2984,3448],[3,2992,3304],[3,2992,3312],[3,2992,3320],[3,2992,3328],[3,2992,3336],[3,2992,3344],[3,2992,3352],[3,2992,3360],[3,2992,3368],[3,2992,3376],[3,2992,3384],[3,2992,3392],[3,2992,3400],[3,2992,3408],[3,2992,3416],[3,2992,3424],[3,2992,3432],[3,2992,3440],[3,2992,3448],[3,3000,3304],[3,3000,3312],[3,3000,3320],[3,3000,3328],[3,3000,3336],[3,3000,3344],[3,3000,3352],[3,3000,3360],[3,3000,3368],[3,3000,3376],[3,3000,3384],[3,3000,3392],[3,3000,3400],[3,3000,3408],[3,3000,3416],[3,3000,3424],[3,3000,3432],[3,3000,3440],[3,3000,3448]]}
+diff --git a/src/mapviewer/EmbeddedScroll.ts b/src/mapviewer/EmbeddedScroll.ts
+new file mode 100644
+index 0000000..da2c30a
+--- /dev/null
++++ b/src/mapviewer/EmbeddedScroll.ts
+@@ -0,0 +1,9 @@
++export type WheelIntent = {kind:'browser'|'scroll'|'zoom';x:number;y:number};
++/** Embedded viewers reserve ordinary wheel input for the host's scroll wall. */
++export function wheelIntent(event:{deltaX:number;deltaY:number;deltaMode:number;altKey:boolean;ctrlKey:boolean;metaKey:boolean},embedded:boolean):WheelIntent {
++    const scale=event.deltaMode===1?16:event.deltaMode===2?400:1;
++    const bounded=(value:number)=>Number.isFinite(value)?Math.max(-400,Math.min(400,value*scale)):0;
++    const x=bounded(event.deltaX),y=bounded(event.deltaY);
++    if(event.ctrlKey||event.metaKey)return {kind:'browser',x:0,y:0};
++    return {kind:embedded&&!event.altKey?'scroll':'zoom',x,y:embedded&&event.altKey?Math.max(-60,Math.min(60,y*.35)):y};
++}

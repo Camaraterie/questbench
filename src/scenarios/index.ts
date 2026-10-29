@@ -1,10 +1,11 @@
 import { a0 } from './a0-rendezvous';
 import { a0duo } from './a0-duo';
+import { workshop } from './a0-workshop';
 import { a1 } from './a1-shield-of-arrav';
 import { c1 } from './c1-hidden-role-scam';
 import type { Role, Scenario, Variant } from './types';
 
-export const SCENARIOS: Scenario[] = [a0, a0duo, a1, c1];
+export const SCENARIOS: Scenario[] = [a0, a0duo, workshop, a1, c1];
 
 export interface ResolvedTask {
     slug: string;
