@@ -1,5 +1,5 @@
 /** Run from smoke-duo inside --network none. Fake model server exercises real OpenCode tool routing. */
-import { mkdirSync, readFileSync, writeFileSync, cpSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, cpSync, readdirSync, rmSync } from 'node:fs';
 import { parseSave, countItem } from '../src/save/parse';
 import { createHash } from 'node:crypto';
 import { bundleTrial } from './bundle-from-harbor';
@@ -36,6 +36,12 @@ export async function harnessSmoke() {
         return new Response(chunk([{ index: 0, delta, finish_reason: null }]) + chunk([{ index: 0, delta: {}, finish_reason: reason }], { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }) + 'data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
     } });
     try {
+        // Force a publication failure, then prove the temporary directory does not poison retry.
+        const checkpointDir = '/logs/tracking/final-checkpoint';
+        mkdirSync(checkpointDir); writeFileSync(checkpointDir + '/blocker', 'fixture');
+        const failedCheckpoint = await fetch('http://localhost:8888/qb-control', { method: 'POST', headers: { 'content-type': 'application/json', 'x-qb-control': readFileSync('/run/qb/studio-token', 'utf8') }, body: JSON.stringify({ action: 'checkpoint', players: ['agent'] }) });
+        if (failedCheckpoint.ok || readdirSync('/logs/tracking').some(name => name.startsWith('.checkpoint-'))) throw new Error('Failed checkpoint staging was not cleaned up');
+        rmSync(checkpointDir, { recursive: true });
         Bun.spawnSync(['bash', '/qb/isolate-aids.sh'], { env: { ...process.env, QB_AIDS: '0' } });
         for (const user of ['seat1', 'seat2']) {
             if (Bun.spawnSync(['runuser', '-u', user, '--', 'test', '-r', '/qb/aids/board.ts']).exitCode === 0) throw new Error('Unaided seat can read board tooling');
@@ -45,10 +51,13 @@ export async function harnessSmoke() {
         writeFileSync('/qb/seats.json', JSON.stringify(seats.map(username => ({ username, brief: 'Read your journal; use execute_code to observe the world, then finish.', initialJournal: 'Initial fixture memory', sessionPolicy: 'finish', discloseDeadline: false }))));
         mkdirSync('/run/qb', { recursive: true });
         writeFileSync('/run/qb/models.json', JSON.stringify({ seats: Object.fromEntries(seats.map(seat => [seat, { model: 'zai-coding-plan/glm-5.3', provider: { 'zai-coding-plan': { options: { baseURL: 'http://127.0.0.1:19191/v1', apiKey: 'local-fixture', headers: { 'x-qb-seat': seat } }, models: { 'glm-5.3': {} } } } }])), env: { ZHIPU_API_KEY: 'local-fixture' } }));
+        mkdirSync('/logs/seats', { recursive: true });
+        writeFileSync('/logs/seats/launch.log', 'fixture aggregate', { mode: 0o644 });
         const launcher = Bun.spawn(['bun', '/qb/seats/launch.ts'], { env: { ...process.env, QB_DURATION_SECS: '180', QB_AIDS: '0' }, stdout: Bun.file('/tmp/qb-harness-launch.log'), stderr: Bun.file('/tmp/qb-harness-launch.log') });
         const timer = setTimeout(() => launcher.kill(), 420000);
         const code = await launcher.exited; clearTimeout(timer);
         if (code !== 0 || readFileSync('/logs/seats/done', 'utf8').trim() !== '0 0') throw new Error('Fixture launcher failed; inspect /tmp/qb-harness-launch.log');
+        if (Bun.spawnSync(['runuser', '-u', 'seat1', '--', 'test', '-r', '/logs/seats/launch.log']).exitCode === 0) throw new Error('Aggregate seat output is not private');
         const checkpoint = JSON.parse(readFileSync('/logs/tracking/final-checkpoint/checkpoint.json', 'utf8'));
         if (!checkpoint.valid || checkpoint.players.length !== 2) throw new Error('Missing grouped engine checkpoint');
         if (checkpoint.recoveredTemporaryItems < 2) throw new Error('Pending-trade recovery was not exercised');

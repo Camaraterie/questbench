@@ -120,6 +120,7 @@ export async function seatInGame(bot: string, request: (url: string, options: Re
 async function main() {
     const seats: SeatSpec[] = JSON.parse(readFileSync('/qb/seats.json', 'utf8'));
     mkdirSync(LOGS, { recursive: true }); chmodSync(LOGS, 0o711);
+    if (existsSync(join(LOGS, 'launch.log'))) chmodSync(join(LOGS, 'launch.log'), 0o600); // aggregate contains every seat's output
     const users = seats.map((s, i) => ({ ...s, user: `seat${i + 1}` }));
     if (users.length < 2 || users.length > 4) throw new Error('Multi-seat runs need two to four seats');
     for (const s of users) if (sh(['id', s.user]).exitCode !== 0) {
