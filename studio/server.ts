@@ -317,6 +317,7 @@ async function operatorApi(req: Request, url: URL): Promise<Response> {
     }
     if (url.pathname === '/api/operator/player' && req.method === 'POST') {
         let body; try { const raw = await req.text(); if (raw.length > 10000) return json({ error: 'Request too large' }, 413); body = JSON.parse(raw); } catch { return json({ error: 'Invalid JSON' }, 400); }
+        if (!['set-slot', 'move'].includes(body.action)) return json({ error: 'Unsupported operator action' }, 400);
         if (body.container !== container || body.username !== username) return json({ error: 'World/player changed; refresh the inspector' }, 409);
         const r = await localGame(container, 8888, '/qb-control', body);
         return json({ ...r.data, container }, r.status);

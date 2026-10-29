@@ -1,7 +1,9 @@
 /** Run from smoke-duo inside --network none. Fake model server exercises real OpenCode tool routing. */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, cpSync } from 'node:fs';
 import { parseSave } from '../src/save/parse';
 import { createHash } from 'node:crypto';
+import { bundleTrial } from './bundle-from-harbor';
+import { returnPlan } from '../src/continuity';
 export async function harnessSmoke() {
     const count: Record<string, { play: number; memory: number }> = {};
     const server = Bun.serve({ hostname: '127.0.0.1', port: 19191, async fetch(req) {
@@ -54,5 +56,14 @@ export async function harnessSmoke() {
             parseSave(new Uint8Array(readFileSync(`/logs/tracking/final-checkpoint/end.${seat}.sav`)));
         }
         console.log('[smoke] Real OpenCode received execute_code, called it, then updated private journals with gameplay tools disabled; grouped saves and unaided isolation passed');
+        const collect = Bun.spawnSync(['bash', '/qb/collect-artifacts.sh'], { env: { ...process.env, QB_EXPLORATORY: '1', QB_TASK: 'a0-return-fixture-journal-20m' }, stdout: 'pipe', stderr: 'pipe' });
+        if (collect.exitCode !== 0) throw new Error('Fixture artifact collection failed');
+        const trial = '/tmp/qb-fixture-job/trial';
+        mkdirSync(trial + '/verifier', { recursive: true });
+        cpSync('/logs/verifier/qb', trial + '/verifier/qb', { recursive: true });
+        const bundled = bundleTrial(trial, '/tmp/qb-fixture-job', { out: '/tmp/qb-fixture-bundles', tasksDir: '/tmp/no-tasks', handle: 'local-no-model-fixture', licence: 'CC-BY-4.0' });
+        const next = returnPlan(bundled.bundle!);
+        for (const role of next.scenario.roles) if (!role.initialJournal?.includes('updated memory')) throw new Error('Collected return lost new journal content');
+        console.log('[smoke] Collection, bundle redaction/integrity and next fresh-context return preserved updated journals and exact engine checkpoint saves');
     } finally { server.stop(true); }
 }
