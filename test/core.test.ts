@@ -28,7 +28,7 @@ describe('save round trip', () => {
     });
     test('corrupted save is rejected', () => {
         const sav = writeSave({ position: { x: 1, z: 1 } });
-        sav[10] ^= 0xff;
+        sav[10] = sav[10]! ^ 0xff;
         expect(() => parseSave(sav)).toThrow(/checksum/);
     });
     test('crc32 matches the standard check value', () => {

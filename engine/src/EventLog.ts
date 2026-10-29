@@ -14,7 +14,7 @@ import path from 'path';
 const LOG_FILE = process.env.EVENT_LOG_FILE || '';
 const GENESIS = '0'.repeat(64);
 
-export type EngineEventKind = 'chat_public' | 'chat_private' | 'trade' | 'varp' | 'wealth' | 'login' | 'logout';
+export type EngineEventKind = 'chat_public' | 'chat_private' | 'trade' | 'varp' | 'wealth' | 'login' | 'logout' | 'intervention';
 
 let prev = GENESIS;
 let seq = 0;

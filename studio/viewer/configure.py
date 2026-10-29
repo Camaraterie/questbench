@@ -36,6 +36,11 @@ edits = {
         ('import { TypeLoader }', 'import { SnapshotMotion } from "./SnapshotMotion";\nimport { TypeLoader }'),
         ('        if (record.m) {', motion + '        if (record.m) {'),
         ('    private moveEntity(e: LiveEntity): void {\n', '    private moveEntity(e: LiveEntity): void {\n' + cycle),
+        ('    private applyMasks(e: LiveEntity, record: FeedEntity, isPlayer: boolean): void {', '    private applyMasks(e: LiveEntity, record: FeedEntity, isPlayer: boolean): void {\n        (e as any).qbOverlay = (record as any).qbOverlay;'),
+    ],
+    'src/live/LiveOverlay.ts': [
+        ('import {researchView', 'import {drawObserverBubbles} from "./ObserverBubbles";\nimport {researchView'),
+        ('            o.headIcons.forEach((icon, index) => this.drawHeadIcon(controller, icon, o.top.x, o.iconY + index * 25, o.nameAlpha));\n        }', '            o.headIcons.forEach((icon, index) => this.drawHeadIcon(controller, icon, o.top.x, o.iconY + index * 25, o.nameAlpha));\n        }\n        drawObserverBubbles(ctx, overlays, width, height);'),
     ],
 }
 for file, replacements in edits.items():
@@ -48,4 +53,5 @@ for file, replacements in edits.items():
             if text.count(before) != 1: raise ValueError(f'Unexpected anchor: {file}: {before}')
             text = text.replace(before, after)
     path.write_text(text)
-if mode != 'restore': shutil.copyfile(Path(__file__).with_name('SnapshotMotion.ts'), root/'src/live/SnapshotMotion.ts')
+if mode != 'restore':
+    for name in ['SnapshotMotion.ts', 'ObserverBubbles.ts']: shutil.copyfile(Path(__file__).with_name(name), root/'src/live'/name)

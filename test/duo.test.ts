@@ -5,7 +5,7 @@ import { resolveTasks } from '../src/scenarios';
 
 test('both duo variants start adjacent in Lumbridge and tell each seat the partner is nearby', () => {
     for (const task of resolveTasks().filter(t => t.scenario.id === 'a0-duo')) {
-        const [buyer, seller] = task.roles;
+        const buyer = task.roles[0]!, seller = task.roles[1]!;
         expect(buyer.save.position).toEqual({ x: 3222, z: 3218 });
         expect(seller.save.position).toEqual({ x: 3223, z: 3218 });
         for (const role of task.roles) expect(role.brief).toContain('starts beside you in the Lumbridge spawn courtyard');

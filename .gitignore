@@ -11,3 +11,4 @@ vendor/
 results/
 __pycache__/
 .playwright-cli/
+.qb-scenarios/
