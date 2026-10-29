@@ -11,8 +11,9 @@
  *   /logs/seats/<bot>/opencode.txt  the seat's OpenCode JSON log (owned by the seat)
  *   /logs/seats/done                written when both seats have finished
  */
-import { chmodSync, chownSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, chownSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, renameSync, openSync, closeSync, constants, fstatSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
 
 interface SeatSpec { username: string; brief: string; sessionPolicy?: 'finish' | 'continue'; discloseDeadline?: boolean; initialJournal?: string }
 interface ModelSpec { model: string; provider: Record<string, unknown> }
@@ -32,6 +33,16 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const sh = (cmd: string[]) => Bun.spawnSync(cmd, { stdout: 'pipe', stderr: 'pipe' });
 const uid = (user: string) => Number(sh(['id', '-u', user]).stdout.toString().trim());
 const gid = (user: string) => Number(sh(['id', '-g', user]).stdout.toString().trim());
+function atomicWrite(path: string, text: string) {
+    const temporary = path + '.' + randomUUID();
+    writeFileSync(temporary, text, { mode: 0o600, flag: 'wx' });
+    renameSync(temporary, path);
+}
+function safeJournal(path: string) {
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try { if (!fstatSync(fd).isFile() || fstatSync(fd).size > 64000) throw new Error('Invalid journal'); return readFileSync(fd, 'utf8'); }
+    finally { closeSync(fd); }
+}
 
 /** OpenCode project config for one seat: its model, our system prompt, the rs-agent MCP server. */
 export function seatConfig(bot: string, spec: ModelSpec) {
@@ -41,8 +52,17 @@ export function seatConfig(bot: string, spec: ModelSpec) {
         model: spec.model,
         agent: { build: { prompt: seatPrompt(bot) } },
         permission: { '*': 'allow', external_directory: 'allow', doom_loop: 'allow' },
-        mcp: { 'rs-agent': { type: 'local', command: ['bun', 'run', '/app/mcp/server.ts'], enabled: true } },
+        mcp: { 'rs-agent': { type: 'local', command: ['bun', 'run', '/app/mcp/server.ts'], enabled: true, timeout: 120000 } },
     };
+}
+
+export function journalConfig(bot: string, spec: ModelSpec) {
+    const config = seatConfig(bot, spec);
+    return { ...config, mcp: { 'rs-agent': { ...config.mcp['rs-agent'], enabled: false }, journal: { type: 'local', command: ['bun', '/qb/seats/journal-server.ts'], enabled: true, timeout: 120000 } },
+        agent: { journal: { mode: 'primary', prompt: `You maintain ${bot}'s personal recollection. Activity is paused. Record your own observations, beliefs, uncertainties, relationships and plans in JOURNAL.md. Do not invent events or correct beliefs using outside knowledge.`,
+            // Use permission rules only. Legacy tools booleans can mask MCP grants in OpenCode.
+            permission: { '*': 'deny', 'journal_*': 'allow' } } },
+        permission: { '*': 'deny', 'journal_*': 'allow' } };
 }
 
 /** Private workspace: links to the shared SDK, its own bot credentials, brief and config. */
@@ -133,6 +153,19 @@ async function main() {
         chownSync(cfg, uid(s.user), gid(s.user)); chmodSync(cfg, 0o600);
     });
 
+    // Exercise the actual configured protocol and OpenCode registration before starting the clock.
+    for (const [i, s] of users.entries()) {
+        const baseEnv = ['HOME=/home/' + s.user, 'PATH=/usr/local/bin:/usr/bin:/bin'];
+        for (const command of [['bun', '/qb/seats/mcp-probe.ts', s.username], ['opencode', 'mcp', 'list']]) {
+            const check = Bun.spawn(['runuser', '-u', s.user, '--', 'env', '-i', ...baseEnv, 'timeout', '150s', ...command], { cwd: dirs[i], stdout: 'pipe', stderr: 'pipe' });
+            const output = await new Response(check.stdout).text();
+            const errors = await new Response(check.stderr).text();
+            const code = await check.exited;
+            writeFileSync(join(LOGS, s.username, command[0] === 'bun' ? 'mcp-probe.log' : 'mcp-registration.log'), output + errors);
+            if (code !== 0 || (command[0] === 'opencode' && !/rs-agent.*connected/.test(output))) throw new Error(`${s.username}: MCP preflight failed; see per-seat diagnostic log`);
+        }
+    }
+
     // The trial clock starts now, for both seats at once.
     writeFileSync('/logs/tracking/qb_start.txt', new Date().toISOString().replace(/\.\d+Z$/, 'Z') + '\n');
     const procs = users.map((s, i) => {
@@ -143,6 +176,7 @@ async function main() {
             QB_DURATION_SECS: process.env.QB_DURATION_SECS ?? '900', QB_SEAT: s.username, QB_MODEL: (models.seats[s.username] ?? models.seats['*'])!.model,
             QB_SESSION_POLICY: s.sessionPolicy ?? 'finish',
             QB_DISCLOSE_DEADLINE: s.discloseDeadline === false ? '0' : '1',
+            QB_AIDS: process.env.QB_AIDS ?? '0',
             OPENCODE_YOLO: 'true', OPENCODE_DANGEROUSLY_SKIP_PERMISSIONS: 'true',
         };
         log(`starting seat ${s.username} as ${s.user} (${env.QB_MODEL})`);
@@ -151,6 +185,28 @@ async function main() {
             { cwd: dirs[i], stdout: 'inherit', stderr: 'inherit' });
     });
     const codes = await Promise.all(procs.map(p => p.exited));
+    for (const s of users) sh(['pkill', '-u', s.user]); // stop descendant scripts before the final checkpoint
+    const checkpoint = await fetch('http://localhost:8888/qb-control', { method: 'POST', headers: { 'content-type': 'application/json', 'x-qb-control': token }, body: JSON.stringify({ action: 'checkpoint', players: users.map(s => s.username) }), signal: AbortSignal.timeout(15_000) });
+    if (!checkpoint.ok) throw new Error(`Final engine checkpoint failed: ${await checkpoint.text()}`);
+    log(`play phase saved at tick ${(await checkpoint.json()).tick}`);
+    // Disconnect game clients. The memory-only phase has no gameplay access.
+    for (const pattern of ['src/lite/runner.ts', 'launch-bot.ts', 'chromium']) sh(['pkill', '-f', pattern]);
+    await Promise.all(users.map(async (s, i) => {
+        if (s.initialJournal === undefined) return;
+        const dir = dirs[i]!;
+        const rows = readFileSync(join(LOGS, s.username, 'opencode.txt'), 'utf8').split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+        const session = rows.map(row => row.sessionID).filter(Boolean).at(-1);
+        if (!session || !/^ses_[a-zA-Z0-9]+$/.test(session)) throw new Error(`${s.username}: no session for memory checkpoint`);
+        const config = join(dir, 'opencode.json');
+        atomicWrite(config, JSON.stringify(journalConfig(s.username, models.seats[s.username] ?? models.seats['*']!)));
+        chownSync(config, uid(s.user), gid(s.user));
+        const memory = Bun.spawn(['runuser', '-u', s.user, '--', 'env', '-i', ...Object.entries({ ...models.env, HOME: '/home/' + s.user, PATH: '/usr/local/bin:/usr/bin:/bin', QB_SEAT: s.username, QB_JOURNAL_SESSION: session }).map(([k, v]) => `${k}=${v}`), 'bash', '/qb/seats/journal-phase.sh'], { cwd: dir, stdout: 'inherit', stderr: 'inherit' });
+        const code = await memory.exited;
+        const text = safeJournal(join(dir, 'JOURNAL.md'));
+        const valid = code === 0 && text.trim().length > 0 && Array.from(text).length <= 8000 && text !== s.initialJournal;
+        atomicWrite(join(LOGS, s.username, 'memory-phase.json'), JSON.stringify({ phase: 'memory-only', code, valid, changed: text !== s.initialJournal, sha256: createHash('sha256').update(text).digest('hex') }));
+        if (!valid) log(`WARNING: ${s.username} memory checkpoint invalid; automatic return must be refused`);
+    }));
     log(`seats finished (exit ${codes.join(', ')})`);
     writeFileSync(join(LOGS, 'done'), codes.join(' ') + '\n');
 }

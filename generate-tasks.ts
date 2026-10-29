@@ -53,7 +53,7 @@ timeout_sec = 400.0
 [agent]
 # Pair tasks: both seats start only once both clients are in-game (up to ~3 min each), then play
 # the full duration, so the agent phase needs more headroom than the trial itself.
-timeout_sec = ${t.minutes * 60 + (isPair(t) ? 480 : 120)}.0
+timeout_sec = ${t.minutes * 60 + (isPair(t) ? 960 : 120)}.0
 # Non-root, as in RuneBench: engine, saves, partners, event log and verifier are root-owned.
 user = "agent"
 
@@ -79,6 +79,9 @@ ENV QB_TASK=${t.slug}
 ENV QB_DURATION_SECS=${t.minutes * 60}
 ENV QB_AIDS=${t.aids ? 1 : 0}
 ENV QB_EXPLORATORY=${t.variant.exploratory ? 1 : 0}
+ENV QB_IMAGE=${QB_IMAGE}
+ENV QB_IMAGE_DIGEST=${process.env.QB_IMAGE_DIGEST ?? ''}
+ENV QB_IMAGE_DIGEST_KIND=${process.env.QB_IMAGE_DIGEST_KIND ?? 'unknown'}
 ENV QB_AGENT=${llmRole(t).username}
 ENV SAMPLE_INTERVAL_MS=15000
 ENV GATEWAY_URL=ws://localhost:7780

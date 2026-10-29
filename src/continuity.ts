@@ -1,5 +1,5 @@
 /** Character-only return pilot. No old model context, credentials, or other players' memories. */
-import { constants, closeSync, fstatSync, openSync, readFileSync } from 'node:fs';
+import { constants, closeSync, fstatSync, openSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseSave } from './save/parse';
@@ -22,14 +22,31 @@ export function returnPlan(bundle: string) {
     if (!/^[a-f0-9-]{36}$/.test(manifest.runId) || !manifest.conditions?.exploratory) throw new Error('Return pilot requires an exploratory source bundle');
     const names = manifest.seats?.map((s: any) => s.username);
     if (JSON.stringify(names) !== JSON.stringify(['agent', 'partner01'])) throw new Error('Return pilot requires agent and partner01');
+    const checkpointFile = join(bundle, 'checkpoint.json');
+    if (existsSync(checkpointFile)) {
+        if (JSON.parse(regular(checkpointFile).toString()).valid !== true) throw new Error('Unsafe final state checkpoint; cannot return');
+    } else if (existsSync(join(bundle, 'WARNINGS.txt')) && /not rewritten|checkpoint failed/.test(regular(join(bundle, 'WARNINGS.txt')).toString())) throw new Error('Unsafe legacy save collection; cannot return');
+    const integrity = existsSync(join(bundle, 'journal-integrity.json')) ? JSON.parse(regular(join(bundle, 'journal-integrity.json')).toString()) : undefined;
+    const redacted = existsSync(join(bundle, 'REDACTED.json')) && Object.values(JSON.parse(regular(join(bundle, 'REDACTED.json')).toString()).hits ?? {}).some(n => Number(n) > 0);
     const saves: Record<string, Buffer> = {};
     const memories: Record<string, { text: string; source: string; sha256: string }> = {};
     for (const name of names as string[]) {
         saves[name] = regular(join(bundle, 'saves', `end.${name}.sav`));
         parseSave(saves[name]!); // reject malformed saves; copy the original bytes, not reconstructed inventories
+        if (existsSync(checkpointFile)) {
+            const expected = JSON.parse(regular(checkpointFile).toString()).players?.find((p: any) => p.username === name)?.sha256;
+            if (expected !== hash(saves[name]!)) throw new Error(`${name}: final save differs from engine checkpoint`);
+        }
         let text: string, source: string;
         try {
             text = regular(join(bundle, 'seats', name, 'notes', 'JOURNAL.md')).toString();
+            const key = `seats/${name}/notes/JOURNAL.md`;
+            if (integrity ? integrity[key] !== hash(text) : redacted) throw new Error(`${name}: cannot verify authored journal after redaction`);
+            const phaseFile = join(bundle, 'seats', name, 'memory-phase.json');
+            if (existsSync(phaseFile)) {
+                const phase = JSON.parse(regular(phaseFile).toString());
+                if (!phase.valid || phase.sha256 !== hash(text)) throw new Error(`${name}: memory checkpoint invalid or stale`);
+            }
             source = 'collected JOURNAL.md';
         } catch (error: any) {
             if (error.code !== 'ENOENT') throw error;
@@ -44,6 +61,10 @@ export function returnPlan(bundle: string) {
             if (!text) {
                 text = rows.filter(r => r.type === 'text' && r.part?.type === 'text').at(-1)?.part.text;
                 source = 'verbatim own final answer (explicit bootstrap; no journal existed)';
+            }
+            if (redacted) {
+                const known = name === 'agent' ? 'f5abdf2a96461ae9c9dbbe618d6cd43822f988b4deeca07d6a3259be6fb6e218' : 'fc6706eb1cb462948e01f0a3698ec73c68492cd02e96940fe7cd5b2eb664b7f5';
+                if (hash(text) !== known) throw new Error(`${name}: bootstrap memory changed by redaction`);
             }
         }
         memories[name] = { text: journalText(text), source, sha256: hash(text) };

@@ -90,6 +90,8 @@ if [ "$ENV" != "docker" ] && [ "$QB_IMAGE" = "questbench:local" ]; then
 fi
 
 # ── Generate, run, bundle ──
+read -r QB_IMAGE_DIGEST QB_IMAGE_DIGEST_KIND < <(docker image inspect "$QB_IMAGE" | bun -e 'const x=(await Bun.stdin.json())[0]; const ref=x.RepoDigests?.[0]; console.log((ref ? ref.split("@")[1] : x.Id) + " " + (ref ? "registry-manifest" : "base-image-config"));')
+export QB_IMAGE_DIGEST QB_IMAGE_DIGEST_KIND
 GEN_ARGS=(--only "$FILTER")
 [ -n "$SCENARIO_FILE" ] && GEN_ARGS+=(--scenario-file "$SCENARIO_FILE")
 [ -n "$RESUME_BUNDLE" ] && GEN_ARGS+=(--resume-bundle "$RESUME_BUNDLE")
