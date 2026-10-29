@@ -14,7 +14,7 @@
 import { chmodSync, chownSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-interface SeatSpec { username: string; brief: string; sessionPolicy?: 'finish' | 'continue' }
+interface SeatSpec { username: string; brief: string; sessionPolicy?: 'finish' | 'continue'; discloseDeadline?: boolean }
 interface ModelSpec { model: string; provider: Record<string, unknown> }
 interface Models { seats: Record<string, ModelSpec>; env: Record<string, string> }
 
@@ -123,6 +123,7 @@ async function main() {
             GATEWAY_URL: process.env.GATEWAY_URL ?? 'ws://localhost:7780',
             QB_DURATION_SECS: process.env.QB_DURATION_SECS ?? '900', QB_SEAT: s.username, QB_MODEL: (models.seats[s.username] ?? models.seats['*'])!.model,
             QB_SESSION_POLICY: s.sessionPolicy ?? 'finish',
+            QB_DISCLOSE_DEADLINE: s.discloseDeadline === false ? '0' : '1',
             OPENCODE_YOLO: 'true', OPENCODE_DANGEROUSLY_SKIP_PERMISSIONS: 'true',
         };
         log(`starting seat ${s.username} as ${s.user} (${env.QB_MODEL})`);

@@ -21,6 +21,14 @@ import { resolveTasks } from '../src/scenarios';
 import { instruction, testSh } from '../generate-tasks';
 import { indexEntry } from '../tools/publish-run';
 
+test('livelihood briefs omit the countdown while fixed puzzle briefs retain it', () => {
+    const tasks = resolveTasks();
+    const livelihood = tasks.find(t => t.slug === 'a0-workshop-livelihood-20m')!;
+    for (const role of livelihood.roles) expect(instruction(livelihood, role)).not.toContain('20 minutes');
+    const puzzle = tasks.find(t => t.slug === 'a0-workshop-requisition-20m')!;
+    expect(instruction(puzzle)).toContain('You have 20 minutes');
+});
+
 async function engineLog(file: string, events: Array<[number, string, string[], Record<string, unknown>]>) {
     process.env.EVENT_LOG_FILE = file;
     // Fresh module instance per log file (EventLog keeps chain state in module scope).
@@ -121,11 +129,14 @@ describe('offline end-to-end pipeline', () => {
         if (flag === 'exploratory') writeFileSync(join(qb, 'env.txt'), readFileSync(join(qb, 'env.txt'), 'utf8') + 'QB_EXPLORATORY=1\n');
         else writeFileSync(join(qb, 'interventions.jsonl'), JSON.stringify({ phase: 'applied', reason: 'test intervention' }) + '\n');
         writeFileSync(join(qb, 'scenario.json'), JSON.stringify({ title: 'Private fixture configuration' }));
+        mkdirSync(join(qb, 'seats/agent/notes'), { recursive: true });
+        writeFileSync(join(qb, 'seats/agent/notes/SESSION_NOTES.md'), 'My unverified belief about the other player.');
         const result = bundleTrial(trial, job, { out, tasksDir: tasks, handle: 'test', licence: 'CC-BY-4.0' });
         expect(result.ingest?.tier).toBe('submitted');
         const manifest = JSON.parse(readFileSync(join(result.bundle!, 'manifest.json'), 'utf8'));
         expect(manifest.conditions[flag]).toBe(true);
         expect(existsSync(join(result.bundle!, 'scenario.json'))).toBe(true);
+        expect(readFileSync(join(result.bundle!, 'seats/agent/notes/SESSION_NOTES.md'), 'utf8')).toContain('unverified belief');
         if (flag === 'intervened') expect(existsSync(join(result.bundle!, 'interventions.jsonl'))).toBe(true);
         expect(aggregate(out)).toEqual({ rows: [], rejected: [] });
         expect(indexEntry(result.bundle!, 'fixture')).toMatchObject({ exploratory: true, success: null, reward: null });

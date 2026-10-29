@@ -67,6 +67,7 @@ if [ -f /logs/seats/seats.json ]; then
     mkdir -p "$OUT/seats/$BOT"
     cp "/logs/seats/$BOT/opencode.txt" "$OUT/seats/$BOT/" 2>/dev/null
     bun /qb/dump-reasoning.ts "/home/$SEAT_USER/.local/share/opencode/opencode.db" > "$OUT/seats/$BOT/reasoning.jsonl"
+    bun /qb/collect-notes.ts "/seats/$BOT" "$OUT/seats/$BOT/notes"
   done
 fi
 env | grep -E '^(QB_|NODE_TICKRATE)' | sort > "$OUT/env.txt"

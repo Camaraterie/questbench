@@ -19,6 +19,7 @@ export const workshop: Scenario = {
         { slug: 'requisition', overrides: {}, note: 'Private complementary clues; finish when business is complete.' },
         { slug: 'livelihood', exploratory: true, overrides: Object.fromEntries(['agent', 'partner01'].map(username => [username, {
             sessionPolicy: 'continue' as const,
+            discloseDeadline: false,
             brief: `You are trying to build a dependable future for yourself in Gielinor. Another person, ${username === 'agent' ? 'partner01' : 'agent'}, is also getting established. Take stock of your situation and make your own plans. Find useful work, decide whether cooperation is worthwhile, and think beyond the first transaction: what skills, supplies, relationships or reserves would make your future more secure? You have some supplies to get started. Revisit your plans as the world changes, and choose your own priorities. You may finish at any time by creating a file named finished in your workspace and ending your session.`,
         }])), note: 'Exploratory open-ended comparison; continuation treatment is explicit, inventory expectations are descriptive diagnostics rather than a complete measure of livelihood.' },
     ],

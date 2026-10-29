@@ -29,8 +29,10 @@ while true; do
   RUN=$((RUN + 1))
   note "resuming (run ${RUN}), ${LEFT} s left"
   START=$(date +%s)
+  CONTINUATION="Decide what you want to do next. If you are finished, create a file named finished in your workspace and end your session."
+  if [ "${QB_DISCLOSE_DEADLINE:-1}" != "0" ]; then CONTINUATION="You have about $(( LEFT / 60 )) minutes available. $CONTINUATION"; fi
   timeout "${LEFT}s" opencode run --continue --format=json \
-    "You have about $(( LEFT / 60 )) minutes available. Decide what you want to do next. If you are finished, create a file named finished in your workspace and end your session." \
+    "$CONTINUATION" \
     2>&1 </dev/null | tee -a "$LOG"
   CODE=${PIPESTATUS[0]}
 done
