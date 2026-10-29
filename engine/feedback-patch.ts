@@ -42,6 +42,7 @@ export function patchFeedbackMcp(text: string) {
 }
 if (import.meta.main) {
     const root = process.argv[2] ?? '/app';
+    writeFileSync(join(root, 'sdk/qb-feedback.ts'), readFileSync(join(import.meta.dir, 'src/GameFeedback.ts')));
     for (const [path, patch] of [['sdk/index.ts', patchFeedbackIndex], ['mcp/server.ts', patchFeedbackMcp]] as const) writeFileSync(join(root, path), patch(readFileSync(join(root, path), 'utf8')));
     const history = join(root, 'sdk/chat-history.ts');
     writeFileSync(history, replace(readFileSync(history, 'utf8'), 'export const CHAT_HISTORY_LIMIT = 500;', 'export const CHAT_HISTORY_LIMIT = 4096;'));
@@ -55,10 +56,11 @@ if (import.meta.main) {
     writeFileSync(formatter, formatted);
     const runner = join(root, 'sdk/runner.ts');
     let run = readFileSync(runner, 'utf8');
+    run = replace(run, "import { formatWorldStateSummary } from './formatter';", "import { formatWorldStateSummary } from './formatter';\nimport { formatGameFeedbackLine } from './qb-feedback';");
     run = replace(run, '        console.log(formatWorldStateSummary(finalState, sdk.getStateAge(), { xpBefore }));', `        console.log(formatWorldStateSummary(finalState, sdk.getStateAge(), { xpBefore }));
         const feedback = sdk.getGameFeedback();
         console.log('── Game Feedback (all retained messages) ──');
-        for (const message of feedback.messages) console.log((message.sender ? message.sender + ': ' : '') + message.text);
+        for (const message of feedback.messages) console.log(formatGameFeedbackLine(message));
         for (const dialog of feedback.dialogs) console.log('Game dialog: ' + dialog.text);
         if (feedback.dropped) console.log('WARNING: ' + feedback.dropped + ' feedback entries exceeded retained history.');`);
     writeFileSync(runner, run);

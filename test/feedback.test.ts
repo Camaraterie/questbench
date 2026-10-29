@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { patchFeedbackIndex, patchFeedbackMcp, patchUseItemEvidence } from '../engine/feedback-patch';
+import { formatGameFeedbackLine } from '../engine/src/GameFeedback';
 const compile = (source: string) => new Bun.Transpiler({ loader: 'ts' }).transformSync(source).replace(/^export /gm, '');
 class History {
     seen = 0; messages: any[] = [];
@@ -15,6 +16,11 @@ const fixture = `export class BotSDK {
     getStateAge() { return 0; }
     /** Get timestamp when state was last received (ms since epoch) */
 }`;
+test('script feedback distinguishes outgoing PM echoes from received speech', () => {
+    expect(formatGameFeedbackLine({ type: 6, fromSelf: true, sender: 'Agent', text: 'Where are you?' })).toBe('[Sent PM to Agent] Where are you?');
+    expect(formatGameFeedbackLine({ type: 3, fromSelf: false, sender: 'Agent', text: 'At the bank.' })).toBe('[PM from Agent] At the bank.');
+    expect(formatGameFeedbackLine({ type: 0, fromSelf: false, sender: '', text: "I can't reach that!" })).toBe("[Game] I can't reach that!");
+});
 test('all game feedback survives same-tick publication, category differences and repeated reads', () => {
     const patched = patchFeedbackIndex(fixture);
     expect(patchFeedbackIndex(patched)).toBe(patched);
