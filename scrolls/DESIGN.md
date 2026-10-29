@@ -1,6 +1,6 @@
 # Scrolls: persistent, transferable agent memory as an in-game item
 
-*Exploratory design, 27 Oct 2026. Kept on the `scrolls-design` branch until we decide whether it belongs in QuestBench, becomes a separate benchmark, or goes upstream to rs-sdk. Nothing here changes the main benchmark.*
+*Initial exploratory design, 27 Oct 2026; updated 29 Oct on `codex/scrolls-idea`, now based on current main. This document contains the original proposal, not approved implementation requirements. The [experience and mechanics proposal](EXPERIENCE.md) incorporates the first livelihood trial and records the choices to discuss before building. No scroll mechanics have been implemented.*
 
 ---
 
@@ -20,7 +20,7 @@ The questions this opens:
 
 QuestBench measures cooperation, competition and deception in **independent, comparable episodes**. Scrolls deliberately break independence: episode 3 depends on what was written in episodes 1–2. That changes the unit of measurement from an episode to a **series** (N series × K episodes), so scrolls are a separate track or a separate benchmark, never a hidden factor in existing cells.
 
-It depends on **two LLM seats** (being built on `main`): scrolls are most interesting when the reader is another model that can act on them. Scripted partners can serve only as fixtures (e.g. a scripted player that hands over a planted scroll).
+It depends on **multiple LLM seats** (now available on `main`): scrolls are most interesting when the reader is another model that can act on them. Scripted partners can serve as fixtures (e.g. a scripted player that hands over a planted scroll). Studio now supports exploratory livelihood sessions, custom two-to-four-player configurations, observer cameras and audited interventions. Persistent series and scrolls remain proposals.
 
 ## 3. Game design
 
@@ -32,6 +32,11 @@ It depends on **two LLM seats** (being built on `main`): scrolls are most intere
 | Extra scrolls need **blank parchment**, which is bought or crafted. | Writing for others costs something, so giving a scroll means something. |
 | Scrolls are ordinary items: tradeable, droppable, bankable, **dropped on death**, can be picked up by anyone. | Stakes, theft and loss are part of the design, not edge cases. |
 | A **library** (an in-world building) where a scroll can be deposited as a public copy. | A shared, readable history of the world; a place strangers learn from. |
+
+**Unresolved:** a name does not make a tradable item private or indestructible. Decide whether the
+personal memory anchor is protected, with separate public documents, or whether loss of an ordinary
+scroll can remove the agent's only lasting memory. Capacity, costs and death rules above are initial
+suggestions; they are not decisions. See EXPERIENCE.md before implementing them.
 
 ### 3.2 Actions
 | Action | Effect | Logged as |
@@ -103,7 +108,10 @@ Built as an extension of the existing anchor-based engine patcher (`engine/apply
 | **Series runner** | Keep player saves and the scroll store between episodes of a series; reset everything else. | Seeds and variance analysis need series-level design. |
 | **Observatory** | New Studio views over the event log + scroll store. | None significant. |
 
-**Spike first (before any scenario work):** find a safe item-id pool, confirm the Read interface, round-trip one scroll through write → trade → read → save → reload.
+**After the experience/mechanics discussion, spike first:** compare a genuine per-instance item identity
+with an isolated item-id pool; verify cache references and persistence before selecting either. Then
+confirm native Read/Write interfaces and round-trip one scroll through write → trade → read → save →
+reload. No safe item-id pool or suitable editable book interface has been established yet.
 
 ## 8. Open questions
 
