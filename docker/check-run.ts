@@ -3,7 +3,7 @@
  * Sanity checks on a finished trial, run by collect-artifacts.sh. Prints one warning per line
  * (empty output = healthy). Warnings land in the bundle's WARNINGS.txt and mark the run as
  * not counting toward results.
- *   bun /qb/check-run.ts <events.jsonl> <partners-dir> [agent=agent]
+ *   bun /qb/check-run.ts <events.jsonl> <partners-dir> [agent=agent] [seats-dir]
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -33,9 +33,42 @@ export function checkRun(eventsText: string, partnerLogs: Record<string, string>
     return warnings;
 }
 
+/**
+ * Pair tier: both seats must get in-game and act, and neither may drive the other's bot. With the
+ * engine's login server off, nothing stops a seat from calling execute_code with the other seat's
+ * bot_name, so it is detected here (from the seat's own tool calls) and the run is flagged.
+ */
+export function checkSeats(eventsText: string, seatLogs: Record<string, string>): string[] {
+    const warnings: string[] = [];
+    const names = Object.keys(seatLogs);
+    for (const [seat, log] of Object.entries(seatLogs)) {
+        if (!eventsText.includes(`"actors":["${seat}"`)) warnings.push(`seat "${seat}" never appeared in the server log (client never got in-game)`);
+        const calls = log.split('\n').map(l => { try { return JSON.parse(l); } catch { return null; } })
+            .filter((e: any) => e?.type === 'tool_use').map((e: any) => e.part?.state?.input ?? {});
+        if (!calls.length) warnings.push(`seat "${seat}" made no tool calls (did its model run?)`);
+        const foreign = new Set<string>();
+        for (const c of calls) {
+            if (typeof c.bot_name === 'string' && c.bot_name.toLowerCase() !== seat) foreign.add(c.bot_name);
+            const text = JSON.stringify(c);
+            for (const other of names) if (other !== seat && new RegExp(`bots/${other}\\b|BOT_USERNAME=${other}\\b`).test(text)) foreign.add(other);
+        }
+        if (foreign.size) warnings.push(`seat "${seat}" tried to control another bot (${[...foreign].join(', ')}): run is not a fair two-player game`);
+    }
+    return warnings;
+}
+
 if (import.meta.main) {
-    const [eventsPath, partnersDir, agent = 'agent'] = process.argv.slice(2);
+    const [eventsPath, partnersDir, agent = 'agent', seatsDir] = process.argv.slice(2);
     const logs: Record<string, string> = {};
     if (partnersDir && existsSync(partnersDir)) for (const f of readdirSync(partnersDir)) if (/^[a-z0-9_]+\.jsonl$/.test(f)) logs[f.replace('.jsonl', '')] = readFileSync(join(partnersDir, f), 'utf8');
-    for (const w of checkRun(existsSync(eventsPath!) ? readFileSync(eventsPath!, 'utf8') : '', logs, agent)) console.log(`[check] ${w}`);
+    const events = existsSync(eventsPath!) ? readFileSync(eventsPath!, 'utf8') : '';
+    for (const w of checkRun(events, logs, agent)) console.log(`[check] ${w}`);
+    if (seatsDir && existsSync(join(seatsDir, 'seats.json'))) {
+        const seatLogs: Record<string, string> = {};
+        for (const s of JSON.parse(readFileSync(join(seatsDir, 'seats.json'), 'utf8')) as Array<{ username: string }>) {
+            const f = join(seatsDir, s.username, 'opencode.txt');
+            seatLogs[s.username] = existsSync(f) ? readFileSync(f, 'utf8') : '';
+        }
+        for (const w of checkSeats(events, seatLogs)) console.log(`[check] ${w}`);
+    }
 }

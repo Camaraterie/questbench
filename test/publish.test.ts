@@ -16,6 +16,9 @@ function tempDir() {
 afterEach(() => { for (const dir of temporaryDirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 function fakeCli(root: string, name: string, source: string) {
+    // These mocks are POSIX executables. On Windows, PATH/shebang lookup can fall through to
+    // the real authenticated gh/git CLI and publish fixture data. Fail before spawning anything.
+    if (process.platform === 'win32') throw new Error('POSIX CLI fixtures must run under WSL');
     const bin = join(root, 'bin');
     mkdirSync(bin, { recursive: true });
     writeFileSync(join(bin, name), `#!${process.execPath}\n${source}`, { mode: 0o755 });
@@ -103,7 +106,7 @@ describe('publish-run', () => {
         expect(existsSync(runs)).toBe(false);
     });
 
-    test('CLI writes markers only after push succeeds, and retries a failed push', () => {
+    test.skipIf(process.platform === 'win32')('CLI writes markers only after push succeeds, and retries a failed push', () => {
         const root = tempDir(), bundles = join(root, 'bundles'), runs = join(root, 'runs-repo');
         const b = bundle(bundles, 'r1');
         mkdirSync(join(runs, '.git'), { recursive: true });
@@ -146,7 +149,7 @@ describe('file-reports', () => {
         expect(g.find(x => x.title.includes('trade window'))!.reports).toHaveLength(2);
     });
 
-    test.each(['create', 'comment'])('failed issue %s keeps every affected bundle eligible for retry', operation => {
+    test.skipIf(process.platform === 'win32').each(['create', 'comment'])('failed issue %s keeps every affected bundle eligible for retry', operation => {
         const root = tempDir(), bundles = join(root, 'bundles');
         const a = bundle(bundles, 'a', { reports: ['trade window never opens', 'pathfinder stuck'] });
         const b = bundle(bundles, 'b', { reports: ['pathfinder stuck'] });

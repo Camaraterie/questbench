@@ -15,10 +15,19 @@ const SRC = join(root, 'server/engine/src');
 const MARK = '// QB-EVENTLOG';
 const IMPORT = "import { logEvent } from '#/engine/entity/tracking/EventLog.js';";
 
-interface Edit { anchor: string | RegExp; insert: string; where: 'before' | 'after' }
+interface Edit { anchor: string | RegExp; insert: string; where: 'before' | 'after' | 'replace' }
 interface FilePatch { file: string; imports: string[]; edits: Edit[] }
 
 const PATCHES: FilePatch[] = [
+    {
+        file: 'web/index.ts',
+        imports: ["import { observerResponse } from '#/engine/entity/tracking/Observer.js';", "import { controlResponse } from '#/engine/entity/tracking/Control.js';"],
+        edits: [{
+            anchor: /(\n(\s*)async function handleRequest\(req: Request, server: Bun\.Server, url: URL\): Promise<Response \| undefined> \{)/,
+            where: 'after',
+            insert: "\n$2    if (process.env.QB_OBSERVER === '1' && req.method === 'GET' && url.pathname === '/qb-observer') return observerResponse(World, url); " + MARK + "\n$2    if (process.env.QB_STUDIO_CONTROL === '1' && url.pathname === '/qb-control' && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(server.requestIP(req)?.address ?? '')) return controlResponse(World, req, url);",
+        }],
+    },
     {
         // Trades: the BOTH_MOVEINV trade-confirm block, where both players are in scope.
         file: 'engine/script/handlers/InvOps.ts',
@@ -59,8 +68,8 @@ const PATCHES: FilePatch[] = [
         imports: [IMPORT, "import { fromBase37 } from '#/util/JString.js';"],
         edits: [{
             anchor: /(\n(\s*)World\.sendPrivateMessage\(player, username, WordPack\.unpack\(buf, input\.length\)\);)/,
-            where: 'before',
-            insert: "\n$2logEvent(World.currentTick, 'chat_private', [player.username, fromBase37(username)], { text: WordPack.unpack(buf, input.length) }); " + MARK,
+            where: 'replace',
+            insert: "\n$2const privateText = WordPack.unpack(buf, input.length);\n$2logEvent(World.currentTick, 'chat_private', [player.username, fromBase37(username)], { text: privateText }); " + MARK + "\n$2World.sendPrivateMessage(player, username, privateText);",
         }],
     },
 ];
@@ -72,6 +81,12 @@ const VARP_TO = (ind: string) => `} else if (typeof value === 'number') {\n${ind
 function count(text: string, re: RegExp) { return (text.match(new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')) ?? []).length; }
 
 export function patchText(file: string, text: string): string {
+    if (file === 'web/index.ts' && !text.includes('controlResponse')) text = text.replace(/^.*if \(process\.env\.QB_OBSERVER.*observerResponse\(World, url\); \/\/ QB-EVENTLOG\r?\n/gm, '');
+    // Upgrade the original hook too: unpack() consumes buf, so logging it inline made delivery
+    // decode pooled bytes after the message. Remove only that exact legacy hook before patching.
+    if (file === 'network/game/client/handler/MessagePrivateHandler.ts') {
+        text = text.replace(/^.*logEvent\(World\.currentTick, 'chat_private', \[player\.username, fromBase37\(username\)\], \{ text: WordPack\.unpack\(buf, input\.length\) \}\); \/\/ QB-EVENTLOG\r?\n/gm, '');
+    }
     if (text.includes(MARK)) return text; // already patched
     const p = PATCHES.find(x => x.file === file)!;
     let out = text;
@@ -83,7 +98,7 @@ export function patchText(file: string, text: string): string {
         out = out.replace(re, (...m) => {
             const whole = m[1] as string, ind = m[2] as string;
             const ins = e.insert.replace(/\$2/g, ind);
-            return e.where === 'before' ? ins + whole : whole + ins;
+            return e.where === 'replace' ? ins : e.where === 'before' ? ins + whole : whole + ins;
         });
     }
     if (file === 'engine/entity/Player.ts') {
@@ -104,6 +119,8 @@ export function patchText(file: string, text: string): string {
 if (import.meta.main) {
     const eventLog = join(SRC, 'engine/entity/tracking/EventLog.ts');
     copyFileSync(join(import.meta.dir, 'src/EventLog.ts'), eventLog);
+    copyFileSync(join(import.meta.dir, 'src/Observer.ts'), join(SRC, 'engine/entity/tracking/Observer.ts'));
+    for (const name of ['Lab.ts', 'Control.ts']) copyFileSync(join(import.meta.dir, 'src', name), join(SRC, 'engine/entity/tracking', name));
     for (const p of PATCHES) {
         const f = join(SRC, p.file);
         if (!existsSync(f)) throw new Error(`missing ${f}`);
