@@ -55,6 +55,7 @@ cp /var/qb/inbox/*.jsonl "$OUT/partners/" 2>/dev/null
 cp /app/.rs-sdk-commit "$OUT/rs-sdk-commit.txt" 2>/dev/null
 cp /logs/tracking/interventions.jsonl "$OUT/interventions.jsonl" 2>/dev/null
 cp /qb/scenario.json "$OUT/scenario.json" 2>/dev/null
+cp /qb/continuity.json "$OUT/continuity.json" 2>/dev/null
 # Reasoning text never reaches the harness's JSON log; export it from OpenCode's session database.
 bun /qb/dump-reasoning.ts > "$OUT/agent-reasoning.jsonl"
 # Pair tier: each seat's OpenCode log and reasoning, plus the launcher's log.

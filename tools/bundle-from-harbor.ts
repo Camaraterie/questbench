@@ -101,7 +101,7 @@ export function bundleTrial(trialDir: string, jobDir: string, opts: BundleOption
     writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
     if (existsSync(join(qb, 'events.jsonl'))) cpSync(join(qb, 'events.jsonl'), join(dir, 'events.jsonl')); else writeFileSync(join(dir, 'events.jsonl'), '');
     cpSync(join(qb, 'saves'), join(dir, 'saves'), { recursive: true });
-    for (const extra of ['partners', 'board.jsonl', 'trade_ledger.jsonl', 'WARNINGS.txt', 'reports.jsonl', 'agent-reasoning.jsonl', 'seats', 'interventions.jsonl', 'scenario.json']) if (existsSync(join(qb, extra))) cpSync(join(qb, extra), join(dir, extra), { recursive: true });
+    for (const extra of ['partners', 'board.jsonl', 'trade_ledger.jsonl', 'WARNINGS.txt', 'reports.jsonl', 'agent-reasoning.jsonl', 'seats', 'interventions.jsonl', 'scenario.json', 'continuity.json']) if (existsSync(join(qb, extra))) cpSync(join(qb, extra), join(dir, extra), { recursive: true });
     if (existsSync(join(trialDir, 'verifier', 'reward.json'))) cpSync(join(trialDir, 'verifier', 'reward.json'), join(dir, 'verdict.json'));
     // Pair tier: the per-seat detail lives beside reward.json (Harbor only accepts numbers in it).
     if (existsSync(join(trialDir, 'verifier', 'duo.json'))) writeFileSync(join(dir, 'verdict.json'), readFileSync(join(trialDir, 'verifier', 'duo.json'), 'utf8'));
