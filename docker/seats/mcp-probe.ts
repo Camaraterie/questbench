@@ -1,5 +1,17 @@
 /** Exercise the configured stdio protocol and read-only game tool before any model calls. */
 import { readFileSync } from 'node:fs';
+export function validProbeResult(result: any): boolean {
+    if (result?.isError) return false;
+    for (const part of result?.content ?? []) {
+        if (part.type !== 'text') continue;
+        const raw = part.text.includes('── Result ──') ? part.text.split('── Result ──')[1].split('── World State ──')[0] : part.text;
+        try {
+            const data = JSON.parse(raw.trim()), p = data.position;
+            if (data.qbReadiness === true && p && Number.isInteger(p.x) && Number.isInteger(p.z) && Number.isInteger(p.level) && p.x > 0 && p.z > 0 && p.x <= 16383 && p.z <= 16383 && p.level >= 0 && p.level <= 3) return true;
+        } catch { /* Other text blocks aren't the probe result. */ }
+    }
+    return false;
+}
 export async function probeMcp(listOnly = false) {
     const config = JSON.parse(readFileSync('opencode.json', 'utf8'));
     const command = config.mcp?.['rs-agent']?.command;
@@ -41,7 +53,7 @@ export async function probeMcp(listOnly = false) {
         if (!listOnly) {
             const bot = process.argv[2];
             const result = await request('tools/call', { name: 'execute_code', arguments: { bot_name: bot, code: 'return {qbReadiness: true, position: sdk.getPosition()};' } });
-            if (result.isError || !JSON.stringify(result).includes('qbReadiness')) throw new Error('Read-only execute_code probe failed');
+            if (!validProbeResult(result)) throw new Error('Read-only execute_code probe failed or returned no position');
         }
         console.log(JSON.stringify({ mcpReady: true, executeCode: true, readOnlyCall: !listOnly }));
     } finally { proc.stdin.end(); proc.kill(); await proc.exited; await consume; }

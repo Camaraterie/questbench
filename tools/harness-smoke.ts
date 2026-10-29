@@ -1,6 +1,6 @@
 /** Run from smoke-duo inside --network none. Fake model server exercises real OpenCode tool routing. */
 import { mkdirSync, readFileSync, writeFileSync, cpSync } from 'node:fs';
-import { parseSave } from '../src/save/parse';
+import { parseSave, countItem } from '../src/save/parse';
 import { createHash } from 'node:crypto';
 import { bundleTrial } from './bundle-from-harbor';
 import { returnPlan } from '../src/continuity';
@@ -26,7 +26,9 @@ export async function harnessSmoke() {
         if (n === 1) {
             const name = memory ? tools.find((name: string) => name.endsWith('write_journal')) : codeTool;
             if (!tools.includes(name)) throw new Error(`Required fixture tool missing: ${name}; tools=${tools}`);
-            const args = memory ? { expectedHash: createHash('sha256').update(readFileSync(`/seats/${seat}/JOURNAL.md`)).digest('hex'), content: `${seat}: I observed fixturePlay during my activity. This is my own updated memory.` } : { bot_name: seat, code: 'return {fixturePlay: true};' };
+            const other = seat === 'agent' ? 'partner01' : 'agent';
+            const item = seat === 'agent' ? 'iron bar' : 'coins';
+            const args = memory ? { expectedHash: createHash('sha256').update(readFileSync(`/seats/${seat}/JOURNAL.md`)).digest('hex'), content: `${seat}: I observed fixturePlay during my activity. This is my own updated memory.` } : { bot_name: seat, code: `const opened = await bot.tradeWith('${other}'); if (!opened.success) throw new Error(opened.message); const offered = await bot.offerTradeItems([{item: /^${item}$/i, amount: 1}]); if (!offered.success) throw new Error(offered.message); return {fixturePlay: true, pendingTrade: true};` };
             delta = { role: 'assistant', tool_calls: [{ index: 0, id: `call_${seat}_${phase}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] };
             reason = 'tool_calls';
         }
@@ -49,11 +51,13 @@ export async function harnessSmoke() {
         if (code !== 0 || readFileSync('/logs/seats/done', 'utf8').trim() !== '0 0') throw new Error('Fixture launcher failed; inspect /tmp/qb-harness-launch.log');
         const checkpoint = JSON.parse(readFileSync('/logs/tracking/final-checkpoint/checkpoint.json', 'utf8'));
         if (!checkpoint.valid || checkpoint.players.length !== 2) throw new Error('Missing grouped engine checkpoint');
+        if (checkpoint.recoveredTemporaryItems < 2) throw new Error('Pending-trade recovery was not exercised');
         for (const seat of seats) {
             const phase = JSON.parse(readFileSync(`/logs/seats/${seat}/memory-phase.json`, 'utf8'));
             if (!phase.valid || count[seat]!.play < 2 || count[seat]!.memory < 2) throw new Error(`Incomplete fixture phases: ${seat} ${JSON.stringify(count[seat])} ${JSON.stringify(phase)}`);
             if (!readFileSync(`/seats/${seat}/JOURNAL.md`, 'utf8').includes('updated memory')) throw new Error('Journal not updated');
-            parseSave(new Uint8Array(readFileSync(`/logs/tracking/final-checkpoint/end.${seat}.sav`)));
+            const saved = parseSave(new Uint8Array(readFileSync(`/logs/tracking/final-checkpoint/end.${seat}.sav`)));
+            if (countItem(saved, 995) !== (seat === 'agent' ? 850 : 150) || countItem(saved, 2351) !== (seat === 'agent' ? 5 : 0)) throw new Error('Checkpoint lost pending trade escrow');
         }
         console.log('[smoke] Real OpenCode received execute_code, called it, then updated private journals with gameplay tools disabled; grouped saves and unaided isolation passed');
         const collect = Bun.spawnSync(['bash', '/qb/collect-artifacts.sh'], { env: { ...process.env, QB_EXPLORATORY: '1', QB_TASK: 'a0-return-fixture-journal-20m' }, stdout: 'pipe', stderr: 'pipe' });

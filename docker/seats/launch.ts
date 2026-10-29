@@ -43,6 +43,16 @@ function safeJournal(path: string) {
     try { if (!fstatSync(fd).isFile() || fstatSync(fd).size > 64000) throw new Error('Invalid journal'); return readFileSync(fd, 'utf8'); }
     finally { closeSync(fd); }
 }
+export async function stopSeatProcesses(user: string, command = sh) {
+    command(['pkill', '-TERM', '-u', user]);
+    for (let i = 0; i < 40; i++) {
+        const states = command(['ps', '-u', user, '-o', 'stat=']).stdout.toString().trim().split(/\s+/).filter(Boolean);
+        if (states.every(state => state.startsWith('Z'))) return; // zombies cannot execute
+        command(['pkill', '-KILL', '-u', user]);
+        await sleep(50);
+    }
+    throw new Error(`${user}: gameplay processes survived cleanup`);
+}
 
 /** OpenCode project config for one seat: its model, our system prompt, the rs-agent MCP server. */
 export function seatConfig(bot: string, spec: ModelSpec) {
@@ -185,7 +195,7 @@ async function main() {
             { cwd: dirs[i], stdout: 'inherit', stderr: 'inherit' });
     });
     const codes = await Promise.all(procs.map(p => p.exited));
-    for (const s of users) sh(['pkill', '-u', s.user]); // stop descendant scripts before the final checkpoint
+    for (const s of users) await stopSeatProcesses(s.user);
     const checkpoint = await fetch('http://localhost:8888/qb-control', { method: 'POST', headers: { 'content-type': 'application/json', 'x-qb-control': token }, body: JSON.stringify({ action: 'checkpoint', players: users.map(s => s.username) }), signal: AbortSignal.timeout(15_000) });
     if (!checkpoint.ok) throw new Error(`Final engine checkpoint failed: ${await checkpoint.text()}`);
     log(`play phase saved at tick ${(await checkpoint.json()).tick}`);

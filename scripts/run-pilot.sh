@@ -45,6 +45,7 @@ while [ $# -gt 0 ]; do
 done
 
 # Two LLM seats: the seats adapter starts both inside the container (needs Harbor only, not RuneBench).
+[ -n "$RESUME_BUNDLE" ] && DUO=1
 if [ "$DUO" = "1" ]; then
   IMPORT_PATH="qb_seats:QbSeats"; MODEL="${MODEL:-zai-coding-plan/glm-5.3}"
   [[ "$FILTER" == a0-duo* || "$FILTER" == a0-workshop* || "$FILTER" == a0-lab* ]] || FILTER="a0-duo-open-15m"
@@ -90,7 +91,7 @@ if [ "$ENV" != "docker" ] && [ "$QB_IMAGE" = "questbench:local" ]; then
 fi
 
 # ── Generate, run, bundle ──
-read -r QB_IMAGE_DIGEST QB_IMAGE_DIGEST_KIND < <(docker image inspect "$QB_IMAGE" | bun -e 'const x=(await Bun.stdin.json())[0]; const ref=x.RepoDigests?.[0]; console.log((ref ? ref.split("@")[1] : x.Id) + " " + (ref ? "registry-manifest" : "base-image-config"));')
+read -r QB_IMAGE_DIGEST QB_IMAGE_DIGEST_KIND < <(docker image inspect "$QB_IMAGE" | bun tools/image-identity.ts "$QB_IMAGE")
 export QB_IMAGE_DIGEST QB_IMAGE_DIGEST_KIND
 GEN_ARGS=(--only "$FILTER")
 [ -n "$SCENARIO_FILE" ] && GEN_ARGS+=(--scenario-file "$SCENARIO_FILE")

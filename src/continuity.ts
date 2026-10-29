@@ -43,6 +43,7 @@ export function returnPlan(bundle: string) {
             const key = `seats/${name}/notes/JOURNAL.md`;
             if (integrity ? integrity[key] !== hash(text) : redacted) throw new Error(`${name}: cannot verify authored journal after redaction`);
             const phaseFile = join(bundle, 'seats', name, 'memory-phase.json');
+            if (!existsSync(phaseFile) && existsSync(join(bundle, 'continuity.json'))) throw new Error(`${name}: memory checkpoint missing`);
             if (existsSync(phaseFile)) {
                 const phase = JSON.parse(regular(phaseFile).toString());
                 if (!phase.valid || phase.sha256 !== hash(text)) throw new Error(`${name}: memory checkpoint invalid or stale`);

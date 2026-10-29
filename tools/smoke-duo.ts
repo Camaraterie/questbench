@@ -115,7 +115,8 @@ try {
         await apply({ action: 'set-slot', store: 'equipment', slot: 3, item: worn.id === null ? null : { id: worn.id, count: worn.count } });
         await apply({ action: 'move', position: { x: 3222, z: 3219, level: 0 } });
         await apply({ action: 'move', position: { x: 3222, z: 3218, level: 0 } });
-        if (typeof buyer.getGameFeedback === 'function') {
+        check(typeof buyer.getGameFeedback === 'function', 'Required game feedback API is missing from image');
+        {
             const originalInventory = current.stores.inventory.map((item: any) => ({ ...item }));
             const originalBank = current.stores.bank[0];
             await apply({ action: 'move', position: { x: 3185, z: 3436, level: 0 } });

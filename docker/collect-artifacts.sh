@@ -9,7 +9,7 @@ MARK=$(date +%s)
 
 pkill -f "partners/run-partner.ts"
 # Pair tier: stop both LLM seats (their OpenCode, MCP server and any scripts) before logouts.
-for u in seat1 seat2 seat3 seat4; do pkill -u "$u" 2>/dev/null; done
+bun -e 'const {stopSeatProcesses}=await import("/qb/seats/launch.ts"); for(const user of ["agent","seat1","seat2","seat3","seat4"]) await stopSeatProcesses(user);' || { echo '[collect] gameplay cleanup failed' | tee -a "$OUT/WARNINGS.txt"; exit 1; }
 bun /qb/checkpoint.ts || echo '[collect] WARNING: final engine checkpoint failed; return is unsafe' | tee -a "$OUT/WARNINGS.txt"
 pkill -f "src/lite/runner.ts"          # partner clients disconnect -> logout -> save
 pkill -f "launch-bot.ts"; pkill -f chromium   # agent client disconnects -> logout -> save
@@ -74,8 +74,7 @@ if [ -f /logs/seats/seats.json ]; then
   bun -e 'for (const s of JSON.parse(require("fs").readFileSync("/logs/seats/seats.json","utf8"))) console.log(s.username + " " + s.user)' |
   while read -r BOT SEAT_USER; do
     mkdir -p "$OUT/seats/$BOT"
-    cp "/logs/seats/$BOT/opencode.txt" "$OUT/seats/$BOT/" 2>/dev/null
-    cp "/logs/seats/$BOT/"mcp-*.log "/logs/seats/$BOT/memory-phase.json" "$OUT/seats/$BOT/" 2>/dev/null
+    bun /qb/collect-notes.ts "/logs/seats/$BOT" "$OUT/seats/$BOT" --seat-logs
     bun /qb/dump-reasoning.ts "/home/$SEAT_USER/.local/share/opencode/opencode.db" > "$OUT/seats/$BOT/reasoning.jsonl"
     bun /qb/collect-notes.ts "/seats/$BOT" "$OUT/seats/$BOT/notes"
   done

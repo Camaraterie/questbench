@@ -9,3 +9,7 @@ declare module '#/engine/routefinder/index.js' {
     export function isFlagged(x: number, z: number, level: number, mask: number): boolean;
     export function isZoneAllocated(x: number, z: number, level: number): boolean;
 }
+declare module '#/cache/config/InvType.js' {
+    const InvType: { SCOPE_TEMP: number; get(id: number): { scope: number } | undefined };
+    export default InvType;
+}

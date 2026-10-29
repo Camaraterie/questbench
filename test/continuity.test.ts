@@ -6,7 +6,9 @@ import { returnPlan, JOURNAL_LIMIT } from '../src/continuity';
 import { writeSave } from '../src/save/write';
 import { resolveTasks } from '../src/scenarios';
 import { instruction } from '../generate-tasks';
-import { seatInGame, journalConfig } from '../docker/seats/launch';
+import { seatInGame, journalConfig, stopSeatProcesses } from '../docker/seats/launch';
+import { validProbeResult } from '../docker/seats/mcp-probe';
+import { imageIdentity } from '../tools/image-identity';
 import { createHash } from 'node:crypto';
 import { captureCheckpoint } from '../engine/src/Checkpoint';
 
@@ -46,6 +48,9 @@ test('fresh-context return retains exact saves and only each players own journal
         writeFileSync(join(dir, 'seats/agent/memory-phase.json'), JSON.stringify({ valid: false }));
         expect(() => returnPlan(dir)).toThrow('invalid or stale');
         rmSync(join(dir, 'seats/agent/memory-phase.json'));
+        writeFileSync(join(dir, 'continuity.json'), '{}');
+        expect(() => returnPlan(dir)).toThrow('memory checkpoint missing');
+        rmSync(join(dir, 'continuity.json'));
         rmSync(join(dir, 'journal-integrity.json'));
         writeFileSync(join(dir, 'seats/agent/notes/JOURNAL.md'), 'x'.repeat(JOURNAL_LIMIT + 1));
         expect(() => returnPlan(dir)).toThrow('no automatic truncation');
@@ -78,6 +83,41 @@ test('grouped engine checkpoint serializes a single tick and rejects incomplete 
     expect(snapshot.players[0]!.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
     expect(() => captureCheckpoint(world, ['agent', 'partner01'])).toThrow('missing');
     expect(() => captureCheckpoint(world, ['../escape'])).toThrow('Invalid');
+});
+
+test('checkpoint recovers temporary items through native interface closure and refuses loss', () => {
+    let offered: any = { id: 2351, count: 2 }, held: any = null;
+    const player = { username: 'agent', invs: new Map([[93, { capacity: 1, get: () => held }], [100, { capacity: 1, get: () => offered }]]),
+        closeModal() { held = offered; offered = null; }, save: () => writeSave({ position: { x: 3222, z: 3218 }, inventory: held ? [held] : [] }) };
+    const checkpoint = captureCheckpoint({ players: [player], currentTick: 1 }, ['agent'], id => id === 100);
+    expect(checkpoint.recoveredTemporaryItems).toBe(2);
+    expect(offered).toBeNull();
+    offered = { id: 2351, count: 2 }; held = null;
+    player.closeModal = () => { offered = null; };
+    expect(() => captureCheckpoint({ players: [player], currentTick: 1 }, ['agent'], id => id === 100)).toThrow('changed item totals');
+});
+
+test('seat cleanup escalates TERM-resistant processes and waits for non-running status', async () => {
+    const commands: string[][] = []; let alive = true;
+    await stopSeatProcesses('seat1', ((cmd: string[]) => {
+        commands.push(cmd); if (cmd.includes('-KILL')) alive = false;
+        return { stdout: Buffer.from(cmd[0] === 'ps' && alive ? 'S' : ''), exitCode: 0 };
+    }) as any);
+    expect(commands.some(cmd => cmd.includes('-KILL'))).toBe(true);
+    expect(commands.filter(cmd => cmd[0] === 'ps')).toHaveLength(2);
+});
+
+test('MCP readiness requires a real position, not merely a marker string', () => {
+    const response = (position: any) => ({ content: [{ type: 'text', text: '── Result ──\n' + JSON.stringify({ qbReadiness: true, position }) + '\n── World State ──\n...' }] });
+    expect(validProbeResult(response(null))).toBe(false);
+    expect(validProbeResult(response({ x: 3222, z: 3218, level: 0 }))).toBe(true);
+    expect(validProbeResult(response({ x: 3222, z: 3218, level: 9 }))).toBe(false);
+});
+
+test('image identity matches the requested repository rather than the first digest', () => {
+    const inspected = { Id: 'sha256:' + 'c'.repeat(64), RepoDigests: ['other/repo@sha256:' + 'a'.repeat(64), 'ghcr.io/owner/questbench@sha256:' + 'b'.repeat(64)] };
+    expect(imageIdentity('ghcr.io/owner/questbench:latest', inspected)).toEqual({ digest: 'sha256:' + 'b'.repeat(64), kind: 'registry-manifest' });
+    expect(imageIdentity('questbench:local', inspected)).toEqual({ digest: inspected.Id, kind: 'base-image-config' });
 });
 
 test('first-run bootstrap preserves each players own authored source verbatim', () => {
