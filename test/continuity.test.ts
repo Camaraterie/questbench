@@ -6,6 +6,14 @@ import { returnPlan, JOURNAL_LIMIT } from '../src/continuity';
 import { writeSave } from '../src/save/write';
 import { resolveTasks } from '../src/scenarios';
 import { instruction } from '../generate-tasks';
+import { seatInGame } from '../docker/seats/launch';
+
+test('returning seat readiness requires fresh login state, not a settings-change event', async () => {
+    for (const [state, expected] of [[{ inGame: true, stateAge: 90 }, true], [{ inGame: true, stateAge: 6000 }, false], [{ inGame: false, stateAge: 0 }, false], [{ inGame: true, stateAge: null }, false]] as const) {
+        expect(await seatInGame('agent', async () => ({ ok: true, json: async () => state }))).toBe(expected);
+    }
+    expect(await seatInGame('agent', async () => { throw new Error('gateway booting'); })).toBe(false);
+});
 
 test('fresh-context return retains exact saves and only each players own journal', () => {
     const dir = mkdtempSync(join(tmpdir(), 'qb-return-'));
