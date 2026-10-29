@@ -113,7 +113,8 @@ cd /tests && bun run ${t.scenario.verifier.replace('.ts', '.js')}
 export function instruction(t: ResolvedTask, llm = llmRole(t)): string {
     const aidsText = t.aids ? readFileSync(join(ROOT, 'aids', 'INSTRUCTIONS.md'), 'utf8') : '';
     const reportText = `\nIf the SDK or this environment seems broken, file a short note with \`bun /qb/aids/report.ts "<what happened>"\` and keep going. Do not use sdk/bug-report.ts.\n`;
-    return `${llm.brief}\n\nYou have ${t.minutes} minutes. You control the bot "${llm.username}" via the rs-agent MCP server (execute_code with bot_name: "${llm.username}").\n${reportText}${aidsText}`;
+    const deadline = llm.discloseDeadline === false ? '' : `You have ${t.minutes} minutes. `;
+    return `${llm.brief}\n\n${deadline}You control the bot "${llm.username}" via the rs-agent MCP server (execute_code with bot_name: "${llm.username}").\n${reportText}${aidsText}`;
 }
 
 /** Harbor's instruction for a pair task. No model reads it: the seats adapter (agents/qb_seats.py)
@@ -146,7 +147,7 @@ if (import.meta.main) {
 
         writeFileSync(join(dir, 'task.toml'), taskToml(t));
         writeFileSync(join(dir, 'instruction.md'), isPair(t) ? pairInstruction(t) : instruction(t));
-        if (isPair(t)) writeFileSync(join(env, 'seats.json'), JSON.stringify(llms.map(r => ({ username: r.username, brief: instruction(t, r), expect: r.expect, sessionPolicy: r.sessionPolicy ?? 'finish' })), null, 2));
+        if (isPair(t)) writeFileSync(join(env, 'seats.json'), JSON.stringify(llms.map(r => ({ username: r.username, brief: instruction(t, r), expect: r.expect, sessionPolicy: r.sessionPolicy ?? 'finish', discloseDeadline: r.discloseDeadline ?? true })), null, 2));
 
         for (const r of t.roles) {
             const varps = { ...(r.save.varps ?? {}) };

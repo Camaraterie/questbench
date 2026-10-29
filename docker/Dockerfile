@@ -13,9 +13,13 @@ COPY engine /qb/engine
 RUN bun /qb/engine/apply-patch.ts /app \
     && grep -q "QB-EVENTLOG" /app/server/engine/src/engine/script/handlers/InvOps.ts \
     && grep -q "QB-EVENTLOG" /app/server/engine/src/network/game/client/handler/MessagePrivateHandler.ts
+RUN bun /qb/engine/sdk-patch.ts /app
 ENV EVENT_LOG_FILE=/logs/tracking/events.jsonl
 ENV QB_OBSERVER=1
 ENV QB_STUDIO_CONTROL=1
+# Controlled local experiments: preserve ordinary messages such as "the trade".
+# The engine passes this setting to both browser clients and its own WordEnc filter.
+ENV NODE_PROFANITY_FILTER=false
 # Private messages are relayed by the engine's friend server, which is off by default; without it
 # every PM is silently dropped (the sender still sees its own "To <name>" echo). EASY_STARTUP starts
 # the friend server as a worker before the world boots; FRIEND_SERVER makes the world use it.
@@ -29,6 +33,7 @@ COPY partners /qb/partners
 COPY aids /qb/aids
 COPY docker/qb-entrypoint.sh /qb-entrypoint.sh
 COPY docker/collect-artifacts.sh /qb/collect-artifacts.sh
+COPY docker/collect-notes.ts /qb/collect-notes.ts
 COPY docker/check-run.ts /qb/check-run.ts
 COPY docker/dump-reasoning.ts /qb/dump-reasoning.ts
 

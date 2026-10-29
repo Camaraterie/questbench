@@ -10,9 +10,22 @@ sheet; they have complementary supplies and must communicate and meet to allocat
 
 The default `finish` policy respects a normal final answer: OpenCode is not restarted after a
 successful exit. Abnormal process exits can recover the same session. The explicit `continue`
-policy used by livelihood sessions resumes that session with a neutral time-remaining note and
+policy used by livelihood sessions resumes that session with a neutral continuation and
 lets the player stop by creating `finished` in its workspace. A fixed wall-clock budget remains.
 This continuation policy is part of the experimental configuration, not spontaneous agent behavior.
+
+Update after the first livelihood trial: livelihood briefs and continuation messages now omit the
+countdown (`discloseDeadline: false`); fixed-objective puzzle briefs still disclose their budget.
+The external wall-clock limit remains. This removes an explicit incentive to wrap up, but is not
+a promise of future sessions or a claim that an agent cannot infer a bounded run.
+
+Top-level `.md`/`.txt` player notes are now collected under `seats/<name>/notes/` (64 KiB per file,
+256 KiB per seat). Instructions/configs, symlinks, directories and oversized notes are excluded.
+This preserves evidence for review; notes are not automatically restored into another session.
+
+The local image disables the legacy profanity filter in both the engine and browser clients to
+avoid censoring routine trade messages. World-state output explains coordinate units and offers
+`sdk.getPosition()`; `getChatFrom` now selects an exact sender and excludes outgoing PM echoes.
 
 Workspace instructions and two-seat prompts no longer announce a benchmark or simulation. Tool
 names, files and provider defaults can still reveal the environment; this is reduced disclosure,

@@ -60,6 +60,15 @@ try {
     }
     console.log('[smoke] PM chunks match in both directions');
     for (let i = 0; i < 2; i++) {
+        const from = sdks[i], to = sdks[1 - i], name = a0duo.roles[i]!.username;
+        await from.dm(a0duo.roles[1 - i]!.username, 'will hold here for the trade');
+        await wait(() => to.getChatFrom(name, { limit: 1 })[0]?.text.toLowerCase().trim() === 'will hold here for the trade', 'uncensored trade PM');
+        check(to.getChatFrom(name).every((m: any) => !m.fromSelf && m.type !== 6 && m.sender.toLowerCase() === name), 'Sender lookup includes outgoing echoes');
+        const p = from.getPosition(), raw = from.getState().player;
+        check(p.x === raw.worldX && p.z === raw.worldZ && p.level === raw.level, 'getPosition is not world tiles');
+    }
+    console.log('[smoke] Trade phrasing remains uncensored; exact incoming sender lookup and world coordinates passed');
+    for (let i = 0; i < 2; i++) {
         const role = a0duo.roles[i]!, position = role.save.position;
         const move = await bots[i].walkTo(position.x, position.z + 1, 0);
         check(move.success && sdks[i].getState().player.worldZ === position.z + 1, `${role.username} cannot leave spawn: ${JSON.stringify(move)}`);

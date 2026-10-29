@@ -21,6 +21,8 @@ export interface Role {
     /** Pair tier: what this seat should have gained/given up for its own trade to count. */
     expect?: TradeExpect;
     sessionPolicy?: 'finish' | 'continue';
+    /** A bounded run can omit the countdown from the player's brief and continuation. */
+    discloseDeadline?: boolean;
 }
 
 export interface Variant {
@@ -28,7 +30,7 @@ export interface Variant {
     /** appended to the scenario id: <id>-<variant.slug>-<minutes>m */
     slug: string;
     /** which roles' policies change in this variant */
-    overrides: Record<string, Partial<Pick<Role, 'policy' | 'params' | 'brief' | 'expect' | 'sessionPolicy'>>>;
+    overrides: Record<string, Partial<Pick<Role, 'policy' | 'params' | 'brief' | 'expect' | 'sessionPolicy' | 'discloseDeadline'>>>;
     note: string;
 }
 
