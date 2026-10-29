@@ -11,8 +11,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install
       - run: bun test
-      - name: typecheck (non-blocking until v0.2)
+      - name: typecheck
         run: bunx tsc --noEmit
-        continue-on-error: true
       - name: generate tasks (fallback varp ids)
-        run: bun generate-tasks.ts && test "$(ls tasks | wc -l)" -eq 20
+        run: bun generate-tasks.ts && bun tools/check-generated-tasks.ts

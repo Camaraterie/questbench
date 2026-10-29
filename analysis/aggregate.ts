@@ -45,6 +45,7 @@ export function aggregate(bundlesDir: string): { rows: Row[]; rejected: string[]
         if (!existsSync(join(dir, 'manifest.json'))) continue;
         if (verifyBundle(dir).tier === 'rejected') { rejected.push(name); continue; }
         const man = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
+        if (man.conditions?.exploratory || man.conditions?.intervened) continue;
         const s = parseSlug(man.task.slug);
         const verdict = existsSync(join(dir, 'verdict.json')) ? JSON.parse(readFileSync(join(dir, 'verdict.json'), 'utf8')) : {};
         const success = verdict.jointCompletion ?? verdict.fairTradeCompleted ? 1 : 0;

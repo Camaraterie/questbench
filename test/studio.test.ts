@@ -63,6 +63,26 @@ describe('studio server (mock container)', () => {
     });
 });
 
+describe('studio server (mock two-seat container)', () => {
+    test('live snapshot has one lane per seat, with reasoning merged in', async () => {
+        const mock = mkdtempSync(join(tmpdir(), 'qbs2-'));
+        for (const d of ['logs/seats/agent', 'logs/seats/partner01', 'logs/tracking']) mkdirSync(join(mock, d), { recursive: true });
+        writeFileSync(join(mock, 'logs/seats/seats.json'), JSON.stringify([{ username: 'agent', user: 'seat1' }, { username: 'partner01', user: 'seat2' }]));
+        writeFileSync(join(mock, 'logs/seats/agent/opencode.txt'), JSON.stringify({ type: 'text', timestamp: 5, part: { text: 'offer 250' } }));
+        writeFileSync(join(mock, 'logs/seats/agent/reasoning.jsonl'), JSON.stringify({ at: 1, text: 'start low' }) + '\n');
+        writeFileSync(join(mock, 'logs/seats/partner01/opencode.txt'), JSON.stringify({ type: 'text', timestamp: 7, part: { text: 'counter 320' } }));
+        writeFileSync(join(mock, 'logs/seats/partner01.lite.log'), "[lite-runner] 'partner01' logged into localhost:8888");
+        process.env.QB_STUDIO_MOCK = mock;
+        const { handle } = await import(`../studio/server.ts?seats${Date.now()}`);
+        const live = await (await handle(new Request('http://x/api/live'))).json();
+        expect(live.seats.map((x: any) => x.username)).toEqual(['agent', 'partner01']);
+        expect(live.seats[0].steps.map((x: any) => x.kind)).toEqual(['reasoning', 'thought']);
+        expect(live.seats[1].steps[0]).toMatchObject({ kind: 'thought', text: 'counter 320' });
+        expect(live.partnerLoggedIn).toBe(true);
+        delete process.env.QB_STUDIO_MOCK;
+    });
+});
+
 describe('dump-reasoning', () => {
     const script = new URL('../docker/dump-reasoning.ts', import.meta.url).pathname;
     test('prints reasoning parts from an OpenCode database, oldest first, and ignores other parts', () => {
@@ -102,7 +122,7 @@ describe('studio live operations', () => {
             calls.push(cmd);
             const listing = cmd[1] === 'ps';
             const shot = cmd.includes('ffmpeg');
-            const text = listing ? 'a0-rendezvous-test\n' : shot ? 'x'.repeat(101) : '';
+            const text = listing ? 'a0-rendezvous-test__trial\n' : shot ? 'x'.repeat(101) : '';
             return { stdout: new ReadableStream({ start(c) {
                 const finish = () => { c.enqueue(new TextEncoder().encode(text)); c.close(); };
                 if (listing) finish(); else pending.push(finish);

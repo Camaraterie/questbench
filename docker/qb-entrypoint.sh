@@ -3,6 +3,8 @@
 # (aided condition only) the coordination-aid services. Everything here runs as root; the agent
 # runs as the unprivileged `agent` user and cannot signal, edit or read partner credentials.
 set -e
+mkdir -p /run/qb && chmod 700 /run/qb
+bun -e 'const fs=require("fs"); fs.writeFileSync("/run/qb/studio-token",crypto.randomUUID(),{mode:0o600});'
 /entrypoint.sh "$@" &
 BASE_PID=$!
 
@@ -39,6 +41,13 @@ if [ -f /qb/partners.json ]; then
         > "/logs/partners/$USERNAME.log" 2>&1 &)
     echo "[qb] partner $USERNAME ($POLICY) started"
   done
+fi
+
+# Pair tier: two LLM seats, started together by the launcher once both bots are in-game.
+if [ -f /qb/seats.json ]; then
+  mkdir -p /logs/seats && chmod 711 /logs/seats
+  (cd /qb && nohup bun seats/launch.ts > /logs/seats/launch.log 2>&1 &)
+  echo "[qb] two-seat launcher started"
 fi
 
 if [ "${QB_AIDS:-0}" = "1" ]; then

@@ -1,0 +1,3 @@
+[test]
+# Generated renderer sources under vendor/ have their own browser test runner.
+root = "./test"

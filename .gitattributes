@@ -1,0 +1,4 @@
+# Container and WSL entrypoints must retain POSIX line endings on Windows checkouts.
+*.sh text eol=lf
+# Unified-diff context markers intentionally include a space on otherwise empty lines.
+*.patch text eol=lf -whitespace

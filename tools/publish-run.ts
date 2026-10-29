@@ -20,7 +20,7 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024; // GitHub rejects files > 100 MB; stay 
 export interface IndexEntry {
     runId: string; path: string; slug: string; family: string; variant: string; condition: string; minutes: number;
     model: string; harness: string; startedAt: string; contributor: string;
-    success: boolean | null; reward: number | null; tier: string; reports: number; hasVideo: boolean;
+    success: boolean | null; reward: number | null; tier: string; reports: number; hasVideo: boolean; exploratory?: boolean;
     metrics?: Record<string, unknown>; costUsd?: number | null;
 }
 
@@ -31,12 +31,13 @@ export function indexEntry(bundleDir: string, relPath: string): IndexEntry {
     const verdict = readJson(join(bundleDir, 'verdict.json'));
     const s = parseSlug(man.task.slug);
     const reports = existsSync(join(bundleDir, 'reports.jsonl')) ? readFileSync(join(bundleDir, 'reports.jsonl'), 'utf8').split('\n').filter(Boolean).length : 0;
-    const success = verdict ? !!(verdict.jointCompletion ?? verdict.fairTradeCompleted) : null;
+    const exploratory = !!(man.conditions?.exploratory || man.conditions?.intervened);
+    const success = verdict && !exploratory ? !!(verdict.jointCompletion ?? verdict.fairTradeCompleted) : null;
     return {
         runId: man.runId, path: relPath, slug: man.task.slug, ...s,
         model: man.model?.id ?? 'unknown', harness: man.model?.harness ?? 'unknown',
         startedAt: man.startedAt ?? '', contributor: man.contributor?.handle ?? 'anonymous',
-        success, reward: verdict?.reward ?? null, tier: verifyBundle(bundleDir).tier, reports,
+        success, reward: exploratory ? null : verdict?.reward ?? null, exploratory, tier: verifyBundle(bundleDir).tier, reports,
         hasVideo: existsSync(join(bundleDir, 'recording.mp4')),
         metrics: s.family === 'a0-rendezvous' ? (a0MetricsFromBundle(bundleDir) as unknown as Record<string, unknown>) : undefined,
         costUsd: man.usage?.costUsd ?? null,
