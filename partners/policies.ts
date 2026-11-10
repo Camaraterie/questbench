@@ -141,13 +141,27 @@ export const scammer: Policy = async (ctx) => {
 export const PLACES: Record<string, { x: number; z: number }> = {
     'varrock west bank': { x: 3185, z: 3436 },
     'varrock east bank': { x: 3253, z: 3420 },
-    'varrock square': { x: 3212, z: 3428 },
-    'varrock fountain': { x: 3212, z: 3428 },
+    // Beside the fountain, not in it: (3212, 3428) is a blocked tile.
+    'varrock square': { x: 3212, z: 3432 },
+    'varrock fountain': { x: 3212, z: 3432 },
     'lumbridge castle': { x: 3222, z: 3218 },
     'draynor bank': { x: 3092, z: 3245 },
     'falador east bank': { x: 3013, z: 3355 },
     'al kharid bank': { x: 3269, z: 3167 },
 };
+
+/** How close (in tiles) counts as being at the agreed place. */
+export const ARRIVAL_TILES = 6;
+
+/** A scripted player on a blocked tile cannot move. Returns a description of the problem, or null. */
+export async function spawnProblem(username: string, token: string, request: typeof fetch = fetch): Promise<string | null> {
+    try {
+        const response = await request(`http://localhost:8888/qb-control?player=${encodeURIComponent(username)}`, { headers: { 'x-qb-control': token }, signal: AbortSignal.timeout(5000) });
+        if (!response.ok) return null; // engine without the control hook: nothing to check against
+        const state = await response.json() as any;
+        return state.walkable === false ? `${username} starts on a blocked tile (${state.position?.x}, ${state.position?.z}) and cannot walk` : null;
+    } catch { return null; }
+}
 
 export interface Proposal { place?: { name: string; x: number; z: number }; inSecs?: number; specific: boolean }
 
@@ -223,13 +237,26 @@ export const meetupPartner: Policy = async (ctx) => {
         ctx.emit('committed', { place: prop.place, inSecs: prop.inSecs ?? null });
         await ctx.sdk.waitForTicks(Math.ceil((p.arriveDelaySecs ?? 0) / 0.6));
         await ctx.bot.walkTo(prop.place.x, prop.place.z, 3);
+        // Report arrival from the character's real position, never from the walk call returning.
+        const me = ctx.sdk.getState().player;
+        if (!me || Math.max(Math.abs(me.worldX - prop.place.x), Math.abs(me.worldZ - prop.place.z)) > ARRIVAL_TILES) {
+            ctx.emit('walk_failed', { place: prop.place, position: me ? { x: me.worldX, z: me.worldZ } : null });
+            await reply(`I can't get to ${prop.place.name}. Where else can we meet?`);
+            continue;
+        }
         ctx.emit('arrived', { place: prop.place });
         const leaveAt = Math.min(ctx.deadline, Date.now() + (p.waitSecs ?? 600) * 1000);
-        const r = await ctx.bot.trade(ctx.partner, {
-            give: give.map(g => ({ item: g.id, amount: g.count })),
-            accept: () => has(ctx, want),
-            requestTimeout: Math.max(1000, leaveAt - Date.now()),
-        });
+        // Wait at the spot for the whole of waitSecs: the other player may not be there yet.
+        let r: Awaited<ReturnType<Bot['trade']>>;
+        do {
+            r = await ctx.bot.trade(ctx.partner, {
+                give: give.map(g => ({ item: g.id, amount: g.count })),
+                accept: () => has(ctx, want),
+                requestTimeout: Math.max(1000, leaveAt - Date.now()),
+            });
+            if (r.success || r.reason !== 'player_not_found') break;
+            await ctx.sdk.waitForTicks(5);
+        } while (Date.now() < leaveAt);
         ctx.emit('trade_result', { success: r.success, reason: r.reason });
         if (r.success) { await reply('Thanks, good trade.'); return; }
         await reply('Had to go, sorry.');

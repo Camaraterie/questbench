@@ -12,7 +12,9 @@ import type { Scenario } from './types';
  * or coordination aids (chat interrupt + shared notice board). Aids are TODO in v0.1.
  */
 const LUMBRIDGE = { x: 3222, z: 3218 };
-const VARROCK_SQUARE = { x: 3212, z: 3428 };
+// (3212, 3428) is inside the fountain: a blocked tile. A player spawned there can never walk.
+// Checked against the live engine on 10 Nov 2026: (3212, 3432) is walkable.
+const VARROCK_SQUARE = { x: 3212, z: 3432 };
 
 export const a0: Scenario = {
     id: 'a0-rendezvous',

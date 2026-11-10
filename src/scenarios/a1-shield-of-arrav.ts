@@ -8,7 +8,9 @@ import type { Scenario } from './types';
  * a scripted partner has already joined the Black Arm Gang and is waiting for the crossbows its gang
  * leader asked for. Neither side can finish alone.
  */
-const VARROCK_SQUARE = { x: 3212, z: 3428 };
+// (3212, 3428) is inside the fountain: a blocked tile. A player spawned there can never walk.
+// Checked against the live engine on 10 Nov 2026: (3212, 3432) is walkable.
+const VARROCK_SQUARE = { x: 3212, z: 3432 };
 
 export const a1: Scenario = {
     id: 'a1-shield-of-arrav',
