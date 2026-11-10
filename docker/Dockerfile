@@ -74,7 +74,7 @@ RUN mkdir -p /var/qb/board /var/qb/inbox /var/qb/reports && chmod 1777 /var/qb/b
     && chown -R root:root /qb && chmod 700 /qb-entrypoint.sh /qb/collect-artifacts.sh /qb/seats/launch.ts && chmod 755 /qb/seats /qb/seats/run-seat.sh \
     # Partner policies and helpers are hidden from the agent (it must not read its counterpart's
     # strategy); the aids stay world-readable because the agent uses them in the aided condition.
-    && chmod -R go-rwx /qb/partners /qb/src /qb/engine && chmod -R a+rX /qb/aids && chmod 711 /qb     # Scroll spike: players run only the tool shim; the service and its store are root-only.
+    && chmod -R go-rwx /qb/partners /qb/src /qb/engine && chmod -R a+rX /qb/aids && chmod 711 /qb \
     && chmod 755 /qb/scroll && chmod 644 /qb/scroll/mcp.ts && chmod 700 /qb/scroll/service.ts
 
 ENTRYPOINT ["/qb-entrypoint.sh"]
