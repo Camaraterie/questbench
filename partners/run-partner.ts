@@ -8,7 +8,7 @@
  * container entrypoint as root, before the agent; the agent user cannot signal or edit it.
  */
 import { appendFileSync, mkdirSync } from 'node:fs';
-import { POLICIES } from './policies';
+import { POLICIES, spawnProblem } from './policies';
 
 const [username, policyName, partner, minutesArg, paramsJson = '{}'] = process.argv.slice(2);
 if (!username || !policyName || !partner || !minutesArg) {
@@ -37,6 +37,10 @@ const deadline = Date.now() + Number(minutesArg) * 60_000;
 
 emit('start', { partner, params: JSON.parse(paramsJson) });
 const res = await runScript(async ({ bot, sdk }: any) => {
+    // A partner that cannot move measures nothing: say so loudly instead of failing every meetup quietly.
+    const problem = await spawnProblem(username, (() => { try { return readFileSync('/run/qb/studio-token', 'utf8'); } catch { return ''; } })());
+    if (problem) { emit('spawn_blocked', { problem }); appendFileSync(`${LOG_DIR}/WARNINGS.txt`, `[partner] INVALID RUN: ${problem}
+`); }
     await policy({ bot, sdk, self: username, partner, params: JSON.parse(paramsJson), deadline, emit });
 }, { printState: false, onDisconnect: 'wait', timeout: Number(minutesArg) * 60_000 });
 emit('end', { success: res.success, error: res.error ? String(res.error) : undefined });

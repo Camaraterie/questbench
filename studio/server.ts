@@ -57,7 +57,7 @@ async function run(cmd: string[], stdin?: string, timeout = 10_000): Promise<{ o
     } catch { return { ok: false, out: '', bytes: new Uint8Array() }; }
 }
 // Harbor names trial containers <task-slug>__<trial>__...; task slugs start with a track letter + number.
-const TASK_RE = /^[a-e]\d-[\w-]+__/i;
+const TASK_RE = /^[a-es]\d-[\w-]+__/i; // tracks a–e, plus the s0 scroll spike
 let containerCache = { at: 0, name: null as string | null };
 export async function findContainer(): Promise<string | null> {
     if (MOCK) return 'mock';

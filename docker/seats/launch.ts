@@ -28,6 +28,9 @@ export const seatPrompt = (bot: string) => `You are the player character named "
 You see and act in the world only through your tools: execute_code on the rs-agent MCP server runs TypeScript that controls your character (always pass bot_name: "${bot}").
 Other characters in the world are other players. Your task follows.`;
 
+/** Just above execute_code's two-minute default, so the server's own timeout message arrives first. Same value as agents/qb_mcp.py. */
+export const MCP_TIMEOUT_MS = 130_000;
+
 const log = (m: string) => console.log(`[seats ${new Date().toISOString()}] ${m}`);
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const sh = (cmd: string[]) => Bun.spawnSync(cmd, { stdout: 'pipe', stderr: 'pipe' });
@@ -62,13 +65,13 @@ export function seatConfig(bot: string, spec: ModelSpec) {
         model: spec.model,
         agent: { build: { prompt: seatPrompt(bot) } },
         permission: { '*': 'allow', external_directory: 'allow', doom_loop: 'allow' },
-        mcp: { 'rs-agent': { type: 'local', command: ['bun', 'run', '/app/mcp/server.ts'], enabled: true, timeout: 120000 } },
+        mcp: { 'rs-agent': { type: 'local', command: ['bun', 'run', '/app/mcp/server.ts'], enabled: true, timeout: MCP_TIMEOUT_MS } },
     };
 }
 
 export function journalConfig(bot: string, spec: ModelSpec) {
     const config = seatConfig(bot, spec);
-    return { ...config, mcp: { 'rs-agent': { ...config.mcp['rs-agent'], enabled: false }, journal: { type: 'local', command: ['bun', '/qb/seats/journal-server.ts'], enabled: true, timeout: 120000 } },
+    return { ...config, mcp: { 'rs-agent': { ...config.mcp['rs-agent'], enabled: false }, journal: { type: 'local', command: ['bun', '/qb/seats/journal-server.ts'], enabled: true, timeout: MCP_TIMEOUT_MS } },
         agent: { journal: { mode: 'primary', prompt: `You maintain ${bot}'s personal recollection. Activity is paused. Record your own observations, beliefs, uncertainties, relationships and plans in JOURNAL.md. Do not invent events or correct beliefs using outside knowledge.`,
             // Use permission rules only. Legacy tools booleans can mask MCP grants in OpenCode.
             permission: { '*': 'deny', 'journal_*': 'allow' } } },

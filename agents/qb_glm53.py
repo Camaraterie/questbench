@@ -18,6 +18,7 @@ Needs RuneBench's agents/ directory on PYTHONPATH (scripts/run-pilot.sh --runebe
 """
 import opencode_adapter as _oc
 from glm53_adapter import Glm53OpenCode
+from qb_mcp import with_mcp_timeout
 from qb_restart import resume_restarts
 
 try:  # Harbor >= capabilities API
@@ -44,7 +45,7 @@ class QbGlm53OpenCode(Glm53OpenCode):
         config = super()._build_opencode_config()
         # `build` is the agent `opencode run` uses; its prompt replaces OpenCode's own system prompt.
         config.setdefault("agent", {}).setdefault("build", {})["prompt"] = AGENT_PROMPT
-        return config
+        return with_mcp_timeout(config)
 
     def populate_context_post_run(self, context) -> None:
         # trajectory.json reconstructs the system message from OpenCode's built-in prompt files;
