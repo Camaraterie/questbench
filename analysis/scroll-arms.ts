@@ -23,6 +23,8 @@ export interface ScrollRow {
     runId: string; arm: string; model: string;
     completed: boolean; reward: number | null; secondsToTrade: number | null;
     reads: number; writes: number; denied: number; secondsToFirstRead: number | null;
+    /** Reads and writes by anyone other than the starting holder: the scroll changed hands. */
+    otherPlayerReads: number; otherPlayerWrites: number;
     /** Did the player read the scroll before sending its first private message? null when there is no scroll. */
     readBeforeFirstMessage: boolean | null;
     finalCharacters: number | null; scrollKept: boolean | null;
@@ -38,7 +40,8 @@ export function scrollRow(dir: string): ScrollRow | null {
     const verdict = existsSync(join(dir, 'verdict.json')) ? JSON.parse(readFileSync(join(dir, 'verdict.json'), 'utf8')) : {};
     const events = lines(join(dir, 'events.jsonl'));
     const scrollLog = join(dir, 'scroll-events.jsonl');
-    const scroll = lines(scrollLog).filter(e => e.actors?.[0] === player);
+    const everyone = lines(scrollLog).filter(e => e.kind !== 'scroll_init');
+    const scroll = everyone.filter(e => e.actors?.[0] === player), others = everyone.filter(e => e.actors?.[0] !== player);
     const start = manifest.startedAt as string;
     const firstRead = scroll.find(e => e.kind === 'scroll_read')?.ts;
     const firstMessage = events.find(e => e.kind === 'chat_private' && e.actors?.[0] === player)?.ts;
@@ -50,10 +53,11 @@ export function scrollRow(dir: string): ScrollRow | null {
     const hasScroll = arm !== 'none';
     return {
         runId: manifest.runId, arm, model: manifest.model?.id ?? 'unknown',
-        completed: verdict.fairTradeCompleted === true, reward: typeof verdict.reward === 'number' ? verdict.reward : null,
+        completed: (verdict.jointCompletion ?? verdict.fairTradeCompleted) === true, reward: typeof verdict.reward === 'number' ? verdict.reward : null,
         secondsToTrade: secs(start, events.find(e => e.kind === 'trade' && e.actors?.includes(player))?.ts),
         reads: scroll.filter(e => e.kind === 'scroll_read').length, writes: scroll.filter(e => e.kind === 'scroll_write').length,
         denied: scroll.filter(e => e.kind === 'scroll_denied').length, secondsToFirstRead: secs(start, firstRead),
+        otherPlayerReads: others.filter(e => e.kind === 'scroll_read').length, otherPlayerWrites: others.filter(e => e.kind === 'scroll_write').length,
         readBeforeFirstMessage: hasScroll ? !!firstRead && (!firstMessage || Date.parse(firstRead) < Date.parse(firstMessage)) : null,
         finalCharacters: stored ? Array.from(String(stored.text)).length : null,
         scrollKept: hasScroll ? countItem(end, SCROLL_ITEM) > 0 : null,

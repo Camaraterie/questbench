@@ -6,8 +6,8 @@
 #   ./scripts/run-pilot.sh -a claude-code -m anthropic/claude-sonnet-4-5   # any built-in Harbor agent
 #   ./scripts/run-pilot.sh --duo                                            # A0 with an LLM in both seats (GLM-5.3 x2)
 #   ./scripts/run-pilot.sh --duo -t a0-duo-goal-mismatch-15m --seat-models partner01=zai-coding-plan/glm-5.3
-#   ./scripts/run-pilot.sh --glm --runebench ../RuneBench --build-local --scrolls --no-publish            # scroll spike: writer life
-#   ./scripts/run-pilot.sh --glm --runebench ../RuneBench --build-local --scroll-from bundles/run-<id> --no-publish   # then the four reader arms
+#   ./scripts/run-pilot.sh --build-local --scrolls --no-publish                           # scroll spike (two LLM seats): writer life
+#   ./scripts/run-pilot.sh --build-local --scroll-from bundles/run-<id> --no-publish      # then the four reader arms
 #   --no-publish  keep results local instead of pushing them to Camaraterie/questbench-runs
 #
 # Image: uses the published image (QB_IMAGE, default ghcr.io/camaraterie/questbench:latest).
@@ -50,9 +50,10 @@ done
 
 # Two LLM seats: the seats adapter starts both inside the container (needs Harbor only, not RuneBench).
 [ -n "$RESUME_BUNDLE" ] && DUO=1
+[ "$SCROLLS" = "1" ] && DUO=1   # the scroll spike runs two LLM seats
 if [ "$DUO" = "1" ]; then
   IMPORT_PATH="qb_seats:QbSeats"; MODEL="${MODEL:-zai-coding-plan/glm-5.3}"
-  [[ "$FILTER" == a0-duo* || "$FILTER" == a0-workshop* || "$FILTER" == a0-lab* ]] || FILTER="a0-duo-open-15m"
+  [[ "$FILTER" == a0-duo* || "$FILTER" == a0-workshop* || "$FILTER" == a0-lab* || "$FILTER" == s0-* ]] || FILTER="a0-duo-open-15m"
   [ -n "$SCENARIO_FILE" ] && FILTER="a0-lab"
   [ -n "$RESUME_BUNDLE" ] && FILTER="a0-return"
 fi

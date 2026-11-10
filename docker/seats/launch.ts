@@ -58,14 +58,16 @@ export async function stopSeatProcesses(user: string, command = sh) {
 }
 
 /** OpenCode project config for one seat: its model, our system prompt, the rs-agent MCP server. */
-export function seatConfig(bot: string, spec: ModelSpec) {
+export function seatConfig(bot: string, spec: ModelSpec, scroll = false) {
     return {
         $schema: 'https://opencode.ai/config.json',
         provider: spec.provider,
         model: spec.model,
         agent: { build: { prompt: seatPrompt(bot) } },
         permission: { '*': 'allow', external_directory: 'allow', doom_loop: 'allow' },
-        mcp: { 'rs-agent': { type: 'local', command: ['bun', 'run', '/app/mcp/server.ts'], enabled: true, timeout: MCP_TIMEOUT_MS } },
+        mcp: { 'rs-agent': { type: 'local', command: ['bun', 'run', '/app/mcp/server.ts'], enabled: true, timeout: MCP_TIMEOUT_MS },
+            // Scroll spike: every seat has the tools; the service answers only the seat carrying the item.
+            ...(scroll ? { scroll: { type: 'local', command: ['bun', '/qb/scroll/mcp.ts'], environment: { QB_SCROLL_TOKEN_FILE: `/run/qb-scroll/${bot}.token` }, enabled: true, timeout: MCP_TIMEOUT_MS } } : {}) },
     };
 }
 
@@ -163,7 +165,7 @@ async function main() {
         const spec = models.seats[s.username] ?? models.seats['*'];
         if (!spec) throw new Error(`no model for seat ${s.username}`);
         const cfg = join(dirs[i]!, 'opencode.json');
-        writeFileSync(cfg, JSON.stringify(seatConfig(s.username, spec), null, 2));
+        writeFileSync(cfg, JSON.stringify(seatConfig(s.username, spec, existsSync('/qb/scroll.json')), null, 2));
         chownSync(cfg, uid(s.user), gid(s.user)); chmodSync(cfg, 0o600);
     });
 
