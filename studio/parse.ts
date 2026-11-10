@@ -5,7 +5,9 @@
 export type Step =
     | { kind: 'thought'; t: number | null; text: string }
     | { kind: 'reasoning'; t: number | null; text: string; secs?: number }
-    | { kind: 'tool'; t: number | null; name: string; code: string; status: 'ok' | 'error' | 'running'; output: string; error?: string; secs?: number; chat: string[] }
+    | { kind: 'tool'; t: number | null; name: string; code: string; status: 'ok' | 'error' | 'running'; output: string; error?: string; secs?: number; chat: string[];
+        /** The world-state block rs-sdk appends to every result. The agent sees it without asking. */
+        world?: string; worldNotes?: string[] }
     | { kind: 'cost'; t: number | null; tokensIn: number; tokensOut: number; reasoning: number; cached: number; cost: number; total: number }
     | { kind: 'note'; t: number | null; text: string };
 
@@ -22,6 +24,21 @@ export function chatFromOutput(out: string): string[] {
 
 export function resultOnly(out: string): string {
     return (out.split(/\n?── World State ──/)[0] ?? '').replace(/^── Result ──\n?/, '').trim();
+}
+
+/** The automatic world-state block that follows the result, or '' when there is none. */
+export function worldOnly(out: string): string {
+    const at = out.search(/── World State ──/);
+    return at < 0 ? '' : out.slice(at).replace(/^── World State ──\n?/, '').trim();
+}
+
+/** What a viewer should not miss in that block: lost hitpoints, and anything fighting the player. */
+export function worldNotes(world: string): string[] {
+    const notes: string[] = [];
+    const hp = world.match(/^HP: (\d+)\/(\d+)/m);
+    if (hp && Number(hp[1]) < Number(hp[2])) notes.push(`HP ${hp[1]}/${hp[2]}`);
+    for (const m of world.matchAll(/^- (.+?)(?: \(Lvl \d+\))?(?: HP: \d+\/\d+)? \[in combat\]/gm)) notes.push(`in combat: ${m[1]}`);
+    return notes;
 }
 
 /** Reasoning traces exported from OpenCode's session database (docker/dump-reasoning.ts). */
@@ -59,6 +76,7 @@ export function parseTrajectory(text: string, reasoning: Reasoning[] = []): Step
                 code: typeof input.code === 'string' ? input.code.trim() : JSON.stringify(input, null, 2),
                 status: st.status === 'error' ? 'error' : st.status === 'completed' ? 'ok' : 'running',
                 output: resultOnly(out), error: st.error, chat: chatFromOutput(out),
+                world: worldOnly(out) || undefined, worldNotes: worldNotes(worldOnly(out)),
                 secs: st.time?.start && st.time?.end ? (st.time.end - st.time.start) / 1000 : undefined,
             });
         } else if (e.type === 'step_finish') {
