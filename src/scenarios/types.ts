@@ -23,6 +23,7 @@ export interface Role {
     sessionPolicy?: 'finish' | 'continue';
     /** A bounded run can omit the countdown from the player's brief and continuation. */
     discloseDeadline?: boolean;
+    initialJournal?: string;
 }
 
 export interface Variant {

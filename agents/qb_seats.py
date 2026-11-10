@@ -92,11 +92,14 @@ class QbSeats(BaseAgent):
         )
         duration = int(((await environment.exec("echo ${QB_DURATION_SECS:-900}", user="root")).stdout or "").strip() or 900)
         # Seats start once both clients are in-game (up to ~6 min), then play `duration`.
-        deadline = time.monotonic() + duration + 420
+        deadline = time.monotonic() + duration + 900
         while time.monotonic() < deadline:
             r = await environment.exec("test -f /logs/seats/done && cat /logs/seats/done", user="root")
             if r.return_code == 0:
                 self.logger.info(f"seats finished: {(r.stdout or '').strip()}")
+                if not (r.stdout or '').strip() or any(code != '0' for code in (r.stdout or '').split()):
+                    await self._usage(environment, context)
+                    raise RuntimeError("Seat launcher failed; inspect per-seat MCP diagnostics and launch.log")
                 break
             await asyncio.sleep(self.poll_sec)
         else:

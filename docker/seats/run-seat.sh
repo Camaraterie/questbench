@@ -14,7 +14,7 @@ left() { echo $(( QB_DURATION_SECS - ( $(date +%s) - $(date -d "$(cat "$LOG_ROOT
 FAST=0; RUN=1
 note "seat ${QB_SEAT} (${QB_MODEL}) run 1, $(left) s left"
 START=$(date +%s)
-timeout "$(left)s" opencode run --format=json "$(cat brief.md)" 2>&1 </dev/null | tee -a "$LOG"
+timeout -k 5s "$(left)s" opencode run --print-logs --format=json "$(cat brief.md)" 2>&1 </dev/null | tee -a "$LOG"
 CODE=${PIPESTATUS[0]}
 while true; do
   DUR=$(( $(date +%s) - START ))
@@ -31,7 +31,7 @@ while true; do
   START=$(date +%s)
   CONTINUATION="Decide what you want to do next. If you are finished, create a file named finished in your workspace and end your session."
   if [ "${QB_DISCLOSE_DEADLINE:-1}" != "0" ]; then CONTINUATION="You have about $(( LEFT / 60 )) minutes available. $CONTINUATION"; fi
-  timeout "${LEFT}s" opencode run --continue --format=json \
+  timeout -k 5s "${LEFT}s" opencode run --continue --print-logs --format=json \
     "$CONTINUATION" \
     2>&1 </dev/null | tee -a "$LOG"
   CODE=${PIPESTATUS[0]}

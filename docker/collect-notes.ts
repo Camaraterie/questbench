@@ -25,4 +25,24 @@ export function collectNotes(workspace: string, output: string): string[] {
     return copied;
 }
 
-if (import.meta.main) collectNotes(process.argv[2]!, process.argv[3]!);
+export function collectSeatLogs(source: string, output: string): string[] {
+    const copied: string[] = [];
+    for (const name of ['opencode.txt', 'mcp-probe.log', 'mcp-registration.log', 'memory-phase.json']) {
+        let fd: number | undefined;
+        try {
+            fd = openSync(join(source, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+            const stat = fstatSync(fd), limit = name === 'opencode.txt' ? 64 * 1024 * 1024 : 1024 * 1024;
+            if (!stat.isFile() || stat.size > limit) continue;
+            const bytes = Buffer.alloc(stat.size);
+            let count = 0;
+            while (count < bytes.length) { const read = readSync(fd, bytes, count, bytes.length - count, count); if (!read) break; count += read; }
+            mkdirSync(output, { recursive: true });
+            writeFileSync(join(output, name), bytes.subarray(0, count));
+            copied.push(name);
+        } catch { /* Reject missing/unsafe entries rather than following a seat-controlled link. */ }
+        finally { if (fd !== undefined) closeSync(fd); }
+    }
+    return copied;
+}
+
+if (import.meta.main) (process.argv.includes('--seat-logs') ? collectSeatLogs : collectNotes)(process.argv[2]!, process.argv[3]!);

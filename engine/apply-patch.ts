@@ -120,7 +120,7 @@ if (import.meta.main) {
     const eventLog = join(SRC, 'engine/entity/tracking/EventLog.ts');
     copyFileSync(join(import.meta.dir, 'src/EventLog.ts'), eventLog);
     copyFileSync(join(import.meta.dir, 'src/Observer.ts'), join(SRC, 'engine/entity/tracking/Observer.ts'));
-    for (const name of ['Lab.ts', 'Control.ts']) copyFileSync(join(import.meta.dir, 'src', name), join(SRC, 'engine/entity/tracking', name));
+    for (const name of ['Lab.ts', 'Control.ts', 'Checkpoint.ts']) copyFileSync(join(import.meta.dir, 'src', name), join(SRC, 'engine/entity/tracking', name));
     for (const p of PATCHES) {
         const f = join(SRC, p.file);
         if (!existsSync(f)) throw new Error(`missing ${f}`);

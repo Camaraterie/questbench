@@ -130,11 +130,18 @@ describe('offline end-to-end pipeline', () => {
         else writeFileSync(join(qb, 'interventions.jsonl'), JSON.stringify({ phase: 'applied', reason: 'test intervention' }) + '\n');
         writeFileSync(join(qb, 'scenario.json'), JSON.stringify({ title: 'Private fixture configuration' }));
         mkdirSync(join(qb, 'seats/agent/notes'), { recursive: true });
+        writeFileSync(join(qb, 'seats/seats.json'), JSON.stringify([{ username: 'agent' }]));
+        writeFileSync(join(qb, 'seats/agent/notes/JOURNAL.md'), 'Email me at somebody@example.com');
+        writeFileSync(join(qb, 'env.txt'), readFileSync(join(qb, 'env.txt'), 'utf8') + `QB_IMAGE=questbench:fixture\nQB_IMAGE_DIGEST=sha256:${'a'.repeat(64)}\nQB_IMAGE_DIGEST_KIND=base-image-config\n`);
         writeFileSync(join(qb, 'seats/agent/notes/SESSION_NOTES.md'), 'My unverified belief about the other player.');
         const result = bundleTrial(trial, job, { out, tasksDir: tasks, handle: 'test', licence: 'CC-BY-4.0' });
         expect(result.ingest?.tier).toBe('submitted');
         const manifest = JSON.parse(readFileSync(join(result.bundle!, 'manifest.json'), 'utf8'));
         expect(manifest.conditions[flag]).toBe(true);
+        expect(manifest.image).toEqual({ ref: 'questbench:fixture', digest: `sha256:${'a'.repeat(64)}` });
+        expect(manifest.provenance.imageDigestKnown).toBe(true);
+        const hashes = JSON.parse(readFileSync(join(result.bundle!, 'journal-integrity.json'), 'utf8'));
+        expect(hashes['seats/agent/notes/JOURNAL.md']).toBeDefined();
         expect(existsSync(join(result.bundle!, 'scenario.json'))).toBe(true);
         expect(readFileSync(join(result.bundle!, 'seats/agent/notes/SESSION_NOTES.md'), 'utf8')).toContain('unverified belief');
         if (flag === 'intervened') expect(existsSync(join(result.bundle!, 'interventions.jsonl'))).toBe(true);

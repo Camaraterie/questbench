@@ -115,10 +115,40 @@ try {
         await apply({ action: 'set-slot', store: 'equipment', slot: 3, item: worn.id === null ? null : { id: worn.id, count: worn.count } });
         await apply({ action: 'move', position: { x: 3222, z: 3219, level: 0 } });
         await apply({ action: 'move', position: { x: 3222, z: 3218, level: 0 } });
+        check(typeof buyer.getGameFeedback === 'function', 'Required game feedback API is missing from image');
+        {
+            const originalInventory = current.stores.inventory.map((item: any) => ({ ...item }));
+            const originalBank = current.stores.bank[0];
+            await apply({ action: 'move', position: { x: 3185, z: 3436, level: 0 } });
+            await buyer.waitForCondition((s: any) => s.player?.worldX === 3185 && s.player?.worldZ === 3436 && s.nearbyNpcs.some((n: any) => /banker/i.test(n.name)), 15000);
+            check((await bots[0].openBank()).success, 'Could not open bank for feedback test');
+            await apply({ action: 'set-slot', store: 'bank', slot: 0, item: { id: 2351, count: 2 } });
+            for (let slot = 0; slot < 28; slot++) await apply({ action: 'set-slot', store: 'inventory', slot, item: { id: 2309, count: 1 } });
+            await buyer.waitForCondition((s: any) => s.inventory.length === 28 && s.bank.items.some((item: any) => item.id === 2351), 5000);
+            const cursor = buyer.getGameFeedback().cursor;
+            const rejected = await bots[0].withdrawItem(/^iron bar$/i, 1);
+            const feedback = buyer.getGameFeedback(cursor);
+            check(!rejected.success && rejected.amountWithdrawn === 0 && count(buyer, 2351) === 0, 'Full inventory withdrawal falsely reported success');
+            check(feedback.messages.some((m: any) => /space|inventory|carry/i.test(m.text)), 'Inventory-full game message was not retained');
+            check(/space|inventory|carry/i.test(rejected.message), 'Withdrawal result omitted server feedback');
+            check(buyer.getGameFeedback(feedback.cursor).messages.length === 0, 'Feedback cursor repeats consumed notices');
+            console.log('[smoke] Full-inventory withdrawal was rejected against state; game feedback reached the action result and independent feedback stream');
+            for (const item of originalInventory) await apply({ action: 'set-slot', store: 'inventory', slot: item.slot, item: item.id === null ? null : { id: item.id, count: item.count } });
+            await apply({ action: 'set-slot', store: 'bank', slot: 0, item: originalBank.id === null ? null : { id: originalBank.id, count: originalBank.count } });
+            await bots[0].closeBank();
+            await apply({ action: 'move', position: { x: 3222, z: 3218, level: 0 } });
+        }
         check(readFileSync('/logs/tracking/interventions.jsonl', 'utf8').includes('"phase":"applied"'), 'No intervention audit');
         console.log('[smoke] Inventory, equipment, bank and movement edits passed; unauthenticated and stale edits rejected');
     }
     console.log(JSON.stringify({ ok: true, pm: 'both directions, multiple chunks', movement: 'both spawns', trade: '150 coins for 5 iron bars' }));
+    if (process.env.QB_SMOKE_HARNESS === '1') {
+        for (const sdk of sdks) sdk.disconnect();
+        processes[3]?.kill(); // launcher supplies the second lite client; keep the first
+        await Bun.sleep(500);
+        const { harnessSmoke } = await import('./harness-smoke');
+        await harnessSmoke();
+    }
     const hold = Math.min(3600, Math.max(0, Number(process.env.QB_SMOKE_HOLD_SECS ?? 0)));
     if (hold) {
         mkdirSync('/logs/tracking', { recursive: true });

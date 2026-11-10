@@ -38,6 +38,8 @@ if (import.meta.main) {
         const file = join(root, 'sdk', name);
         writeFileSync(file, patch(readFileSync(file, 'utf8')));
     }
+    const mcp = join(root, 'mcp/server.ts');
+    writeFileSync(mcp, once(readFileSync(mcp, 'utf8'), '  initPathfinding();', '  const startupLog = console.log;\n  console.log = console.error;\n  try { initPathfinding(); } finally { console.log = startupLog; }'));
     const api = join(root, 'sdk/API.md');
     const text = readFileSync(api, 'utf8');
     if (!text.includes('## QuestBench coordinate and chat clarification')) writeFileSync(api, text + `

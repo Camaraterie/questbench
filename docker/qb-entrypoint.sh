@@ -5,6 +5,7 @@
 set -e
 mkdir -p /run/qb && chmod 700 /run/qb
 bun -e 'const fs=require("fs"); fs.writeFileSync("/run/qb/studio-token",crypto.randomUUID(),{mode:0o600});'
+bash /qb/isolate-aids.sh
 /entrypoint.sh "$@" &
 BASE_PID=$!
 
