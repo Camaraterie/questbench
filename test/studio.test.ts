@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseJsonl, parseTrajectory, partnerProgress, chatFromOutput } from '../studio/parse';
+import { parseJsonl, parseTrajectory, partnerProgress, chatFromOutput, worldNotes, worldOnly } from '../studio/parse';
 
 describe('studio parse', () => {
     test('trajectory: thoughts, tool calls with chat, errors, costs, notes', () => {
@@ -19,6 +19,9 @@ describe('studio parse', () => {
         const tool = s[1] as any;
         expect(tool.chat).toEqual(['→ PM to Partner01: meet at bank']);
         expect(tool.output).not.toContain('World State');
+        expect(tool.world).toBe('Tick 1'); // kept, shown in its own expandable block
+        expect(tool.worldNotes).toEqual([]);
+        expect((s[2] as any).world).toBeUndefined();
         expect(tool.secs).toBe(1);
         expect((s[2] as any).status).toBe('error');
         expect(s[1]!.t).toBe(1);
@@ -33,6 +36,15 @@ describe('studio parse', () => {
         expect(s[1]).toMatchObject({ text: 'plan the trade', t: 2, secs: 1.5 });
         expect(s[3]).toMatchObject({ text: 'after everything', t: 8 });
     });
+    test('the world-state block flags what the agent learned without asking', () => {
+        const world = ['# World State', '## Skills', 'Attack: 5 (400 xp)', 'HP: 3/10 (1,110 xp)', '## Nearby NPCs',
+            '- Giant spider (Lvl 2) HP: 2/5 [in combat] - 0 tiles (idx: 2804) [Attack]', '- Shop keeper - 1 tiles (idx: 2820) [Talk-to, Trade]'].join('\n');
+        expect(worldOnly(`── Result ──\n{"open": true}\n\n── World State ──\n${world}`)).toBe(world);
+        expect(worldNotes(world)).toEqual(['HP 3/10', 'in combat: Giant spider']);
+        expect(worldNotes('HP: 10/10 (1,154 xp)\n- Man (Lvl 2) - 7 tiles (idx: 1) [Attack]')).toEqual([]);
+        expect(worldOnly('── Result ──\nok')).toBe('');
+    });
+
     test('bad escapes in chat-shaped output do not throw', () => {
         expect(chatFromOutput('{"type": 3, "text": "a \\q b", "sender": "x", "fromSelf": false}')).toEqual([]);
     });

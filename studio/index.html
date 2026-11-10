@@ -195,7 +195,9 @@ function renderSteps(steps) {
     const icon = s.status === 'error' ? '<i class="fas fa-circle-xmark has-text-danger"></i>' : s.status === 'running' ? '<i class="fas fa-spinner fa-spin"></i>' : '<i class="fas fa-circle-check has-text-success"></i>';
     const chat = (s.chat || []).map(c => `<div class="pm"><i class="fas fa-envelope"></i> ${esc(c)}</div>`).join('');
     const out = s.status === 'error' ? `<pre class="out err">${esc(s.error || 'error')}</pre>` : s.output ? `<details><summary>result</summary><pre class="out">${esc(s.output)}</pre></details>` : '';
-    return `<div class="step">${t}${icon} <span class="tool-name">${esc(s.name)}</span>${s.secs != null ? ` <span class="cost">${s.secs.toFixed(1)}s</span>` : ''}<pre class="code">${esc(s.code)}</pre>${chat}${out}</div>`;
+    const notes = (s.worldNotes || []).map(n => `<span class="tag is-warning is-light ml-1">${esc(n)}</span>`).join('');
+    const world = s.world ? `<details><summary>also shown to the agent: world state${notes}</summary><pre class="out">${esc(s.world)}</pre></details>` : '';
+    return `<div class="step">${t}${icon} <span class="tool-name">${esc(s.name)}</span>${s.secs != null ? ` <span class="cost">${s.secs.toFixed(1)}s</span>` : ''}<pre class="code">${esc(s.code)}</pre>${chat}${out}${world}</div>`;
   }).join('');
 }
 function renderEvents(events) {
