@@ -20,6 +20,14 @@ date -u +%Y-%m-%dT%H:%M:%SZ > /logs/tracking/qb_start.txt
 # Snapshot start saves before anyone logs in (the verifier also has its own copies in /tests/start).
 mkdir -p /logs/tracking/start_saves && chmod 700 /logs/tracking/start_saves && cp /app/server/engine/data/players/main/*.sav /logs/tracking/start_saves/ 2>/dev/null || true
 
+# Field-notes spike: the world's one scroll, served only to whoever carries the scroll item.
+if [ -f /qb/scroll.json ]; then
+  (cd /qb && nohup bun scroll/service.ts > /logs/tracking/scroll-service.log 2>&1 &)
+  for i in $(seq 1 30); do [ -s /run/qb-scroll/"${QB_AGENT:-agent}".token ] && break; sleep 1; done
+  [ -s /run/qb-scroll/"${QB_AGENT:-agent}".token ] || echo "[qb] WARNING: scroll service did not start" | tee -a /logs/partners/WARNINGS.txt
+  echo "[qb] scroll service started"
+fi
+
 DURATION_MIN=$(( ${QB_DURATION_SECS:-900} / 60 ))
 if [ -f /qb/partners.json ]; then
   bun -e '

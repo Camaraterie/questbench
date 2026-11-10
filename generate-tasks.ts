@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { resolveTasks, type ResolvedTask } from './src/scenarios';
 import { customScenario } from './src/scenarios/custom';
 import { returnPlan } from './src/continuity';
+import { fieldNotesScenario, scrollFromBundle } from './src/scrolls';
 import { writeSave } from './src/save/write';
 import { DEFAULT_VARP_PACK_PATHS, loadVarpIds, varpId } from './src/save/varps';
 
@@ -69,7 +70,13 @@ name = "rs-agent"
 transport = "stdio"
 command = "bun"
 args = ["run", "/app/mcp/server.ts"]
-`;
+${t.variant.scroll && t.variant.scroll.arm !== 'none' ? `
+[[environment.mcp_servers]]
+name = "scroll"
+transport = "stdio"
+command = "bun"
+args = ["/qb/scroll/mcp.ts"]
+` : ''}`;
 }
 
 export function dockerfile(t: ResolvedTask): string {
@@ -90,7 +97,10 @@ ${saves}
 COPY partners.json /qb/partners.json
 COPY scenario.json /qb/scenario.json
 RUN chown root:root ${PLAYERS_DIR}/*.sav /qb/partners.json /qb/scenario.json && chmod 600 /qb/partners.json /qb/scenario.json
-${isPair(t) ? `# Both seats' private briefs: root-only; docker/seats/launch.ts hands each seat only its own.
+${t.variant.scroll && t.variant.scroll.arm !== 'none' ? `# The world's one scroll: root-only; docker/scroll/service.ts serves it to whoever carries the item.
+COPY scroll.json /qb/scroll.json
+RUN chown root:root /qb/scroll.json && chmod 600 /qb/scroll.json
+` : ''}${isPair(t) ? `# Both seats' private briefs: root-only; docker/seats/launch.ts hands each seat only its own.
 COPY seats.json /qb/seats.json
 RUN chown root:root /qb/seats.json && chmod 600 /qb/seats.json
 ` : ''}`;
@@ -135,10 +145,12 @@ async function bundleVerifier(entry: string, outDir: string) {
 if (import.meta.main) {
     const scenarioFile = arg('scenario-file');
     const resumeBundle = arg('resume-bundle');
-    if (scenarioFile && resumeBundle) throw new Error('Choose a custom scenario or a character return');
+    const scrollFrom = arg('scroll-from');
+    const scrolls = process.argv.includes('--scrolls') || !!scrollFrom;
+    if ([scenarioFile, resumeBundle, scrolls ? 'scrolls' : undefined].filter(Boolean).length > 1) throw new Error('Choose one of a custom scenario, a character return or the scroll spike');
     const returning = resumeBundle ? returnPlan(resumeBundle) : undefined;
     const custom = scenarioFile ? customScenario(JSON.parse(readFileSync(scenarioFile, 'utf8'))) : undefined;
-    const tasks = resolveTasks(returning ? [returning.scenario] : custom ? [custom] : undefined).filter(t => !only || t.slug.includes(only));
+    const tasks = resolveTasks(returning ? [returning.scenario] : custom ? [custom] : scrolls ? [fieldNotesScenario(scrollFrom ? scrollFromBundle(scrollFrom) : undefined)] : undefined).filter(t => !only || t.slug.includes(only));
     if (!tasks.length) throw new Error('No matching tasks');
     rmSync(TASKS, { recursive: true, force: true });
     console.log(`Generating ${tasks.length} tasks (varp ids from ${varpSource}; image ${QB_IMAGE})`);
@@ -169,6 +181,7 @@ if (import.meta.main) {
         writeFileSync(join(env, 'partners.json'), JSON.stringify(partners, null, 2));
         writeFileSync(join(env, 'Dockerfile'), dockerfile(t) + (returning ? '\nCOPY continuity.json /qb/continuity.json\nRUN chmod 600 /qb/continuity.json\n' : ''));
         if (returning) writeFileSync(join(env, 'continuity.json'), JSON.stringify(returning.lineage, null, 2));
+        if (t.variant.scroll && t.variant.scroll.arm !== 'none') writeFileSync(join(env, 'scroll.json'), JSON.stringify(t.variant.scroll, null, 2));
         writeFileSync(join(env, 'scenario.json'), JSON.stringify(t, null, 2));
         writeFileSync(join(tests, 'test.sh'), testSh(t));
         await bundleVerifier(t.scenario.verifier, tests);
