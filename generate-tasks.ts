@@ -100,7 +100,8 @@ RUN chown root:root ${PLAYERS_DIR}/*.sav /qb/partners.json /qb/scenario.json && 
 ${t.variant.scroll && t.variant.scroll.arm !== 'none' ? `# The world's one scroll: root-only; docker/scroll/service.ts serves it to whoever carries the item.
 COPY scroll.json /qb/scroll.json
 RUN chown root:root /qb/scroll.json && chmod 600 /qb/scroll.json
-` : ''}${isPair(t) ? `# Both seats' private briefs: root-only; docker/seats/launch.ts hands each seat only its own.
+${isPair(t) ? `ENV QB_SCROLL_PLAYERS=${llmRoles(t).map((r, i) => `${r.username}:seat${i + 1}`).join(',')}
+` : ''}` : ''}${isPair(t) ? `# Both seats' private briefs: root-only; docker/seats/launch.ts hands each seat only its own.
 COPY seats.json /qb/seats.json
 RUN chown root:root /qb/seats.json && chmod 600 /qb/seats.json
 ` : ''}`;
