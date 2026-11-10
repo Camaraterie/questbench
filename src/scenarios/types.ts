@@ -31,7 +31,9 @@ export interface Variant {
     /** appended to the scenario id: <id>-<variant.slug>-<minutes>m */
     slug: string;
     /** which roles' policies change in this variant */
-    overrides: Record<string, Partial<Pick<Role, 'policy' | 'params' | 'brief' | 'expect' | 'sessionPolicy' | 'discloseDeadline'>>>;
+    overrides: Record<string, Partial<Pick<Role, 'policy' | 'params' | 'brief' | 'expect' | 'sessionPolicy' | 'discloseDeadline' | 'save'>>>;
+    /** Field-notes spike only: the world's single scroll (src/scrolls.ts). */
+    scroll?: import('../scrolls').ScrollSpec;
     note: string;
 }
 

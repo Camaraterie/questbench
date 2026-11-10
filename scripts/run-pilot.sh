@@ -6,6 +6,8 @@
 #   ./scripts/run-pilot.sh -a claude-code -m anthropic/claude-sonnet-4-5   # any built-in Harbor agent
 #   ./scripts/run-pilot.sh --duo                                            # A0 with an LLM in both seats (GLM-5.3 x2)
 #   ./scripts/run-pilot.sh --duo -t a0-duo-goal-mismatch-15m --seat-models partner01=zai-coding-plan/glm-5.3
+#   ./scripts/run-pilot.sh --glm --runebench ../RuneBench --build-local --scrolls --no-publish            # scroll spike: writer life
+#   ./scripts/run-pilot.sh --glm --runebench ../RuneBench --build-local --scroll-from bundles/run-<id> --no-publish   # then the four reader arms
 #   --no-publish  keep results local instead of pushing them to Camaraterie/questbench-runs
 #
 # Image: uses the published image (QB_IMAGE, default ghcr.io/camaraterie/questbench:latest).
@@ -19,14 +21,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 
-AGENT="claude-code"; MODEL=""; IMPORT_PATH=""; RB=""; TRIALS=1; DUO=0; SEAT_MODELS=""; SCENARIO_FILE=""; RESUME_BUNDLE=""
+AGENT="claude-code"; MODEL=""; IMPORT_PATH=""; RB=""; TRIALS=1; DUO=0; SEAT_MODELS=""; SCENARIO_FILE=""; RESUME_BUNDLE=""; SCROLLS=0; SCROLL_FROM=""
 FILTER="a0-rendezvous-punctual-bare-15m"; ENV="docker"; HANDLE="${QB_HANDLE:-anonymous}"; BUILD_LOCAL=0; PUBLISH=1
 while [ $# -gt 0 ]; do
   case "$1" in
     -a) AGENT="$2"; shift 2 ;;
     -m) MODEL="$2"; shift 2 ;;
     -k) TRIALS="$2"; shift 2 ;;
-    -t) case "$2" in a0-*) FILTER="$2" ;; *) FILTER="a0-rendezvous-$2" ;; esac; shift 2 ;;
+    -t) case "$2" in a0-*|s0-*) FILTER="$2" ;; *) FILTER="a0-rendezvous-$2" ;; esac; shift 2 ;;
     --all) FILTER="a0-rendezvous"; shift ;;
     --env) ENV="$2"; shift 2 ;;
     --handle) HANDLE="$2"; shift 2 ;;
@@ -37,6 +39,8 @@ while [ $# -gt 0 ]; do
     --seat-models) SEAT_MODELS="$2"; shift 2 ;;
     --scenario-file) SCENARIO_FILE="$2"; shift 2 ;;
     --resume-bundle) RESUME_BUNDLE="$2"; shift 2 ;;
+    --scrolls) SCROLLS=1; shift ;;                       # field-notes spike, writer life
+    --scroll-from) SCROLLS=1; SCROLL_FROM="$2"; shift 2 ;; # reader lives from a writer bundle
     --build-local) BUILD_LOCAL=1; shift ;;
     --no-publish) PUBLISH=0; shift ;;
     --skip-build) shift ;;   # accepted for compatibility; the published image is the default now
@@ -96,6 +100,10 @@ export QB_IMAGE_DIGEST QB_IMAGE_DIGEST_KIND
 GEN_ARGS=(--only "$FILTER")
 [ -n "$SCENARIO_FILE" ] && GEN_ARGS+=(--scenario-file "$SCENARIO_FILE")
 [ -n "$RESUME_BUNDLE" ] && GEN_ARGS+=(--resume-bundle "$RESUME_BUNDLE")
+if [ "$SCROLLS" = "1" ]; then
+  # Writer life alone, or the four reader arms once a writer bundle exists.
+  if [ -n "$SCROLL_FROM" ]; then GEN_ARGS=(--scroll-from "$SCROLL_FROM"); [[ "$FILTER" == s0-* ]] && GEN_ARGS+=(--only "$FILTER"); else GEN_ARGS=(--scrolls --only s0-field-notes-write); fi
+fi
 bun generate-tasks.ts "${GEN_ARGS[@]}"
 STAMP=$(date +%Y%m%d-%H%M%S)
 mkdir -p bundles results

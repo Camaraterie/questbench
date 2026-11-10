@@ -64,6 +64,11 @@ cp /app/.rs-sdk-commit "$OUT/rs-sdk-commit.txt" 2>/dev/null
 cp /logs/tracking/interventions.jsonl "$OUT/interventions.jsonl" 2>/dev/null
 cp /qb/scenario.json "$OUT/scenario.json" 2>/dev/null
 cp /qb/continuity.json "$OUT/continuity.json" 2>/dev/null
+# Field-notes spike: the scroll as it ended, and every read, write and refusal.
+pkill -f "scroll/service.ts"
+cp /var/qb/scrolls/store.json "$OUT/scroll.json" 2>/dev/null
+cp /logs/tracking/scrolls.jsonl "$OUT/scroll-events.jsonl" 2>/dev/null
+cp /qb/scroll.json "$OUT/scroll-start.json" 2>/dev/null
 # Reasoning text never reaches the harness's JSON log; export it from OpenCode's session database.
 bun /qb/dump-reasoning.ts > "$OUT/agent-reasoning.jsonl"
 # Pair tier: each seat's OpenCode log and reasoning, plus the launcher's log.
